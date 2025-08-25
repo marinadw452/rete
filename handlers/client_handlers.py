@@ -1,0 +1,104 @@
+from aiogram import Router, types
+from states import user_states
+from keyboards import subscription_keyboard, city_keyboard, create_neighborhood_keyboard
+from validators import valid_name, valid_phone
+from database import get_conn
+
+router = Router()
+
+@router.callback_query(lambda c: c.data.startswith("role_client"))
+async def choose_role(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    state = user_states.get(user_id, {})
+    
+    state["role"] = "client"
+    state["step"] = "subscription"
+    user_states[user_id] = state
+    
+    await callback.message.answer("اختر نوع الاشتراك:", reply_markup=subscription_keyboard())
+
+@router.callback_query(lambda c: c.data.startswith("sub_"))
+async def choose_subscription(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    state = user_states.get(user_id)
+    
+    sub = callback.data.replace("sub_", "")
+    state["subscription"] = sub
+    state["step"] = "full_name"
+    
+    await callback.message.answer("اكتب اسمك الثلاثي:")
+    
+@router.message(lambda m: user_states.get(m.from_user.id, {}).get("step") == "full_name")
+async def get_full_name(message: types.Message):
+    user_id = message.from_user.id
+    state = user_states[user_id]
+    
+    if not valid_name(message.text):
+        return await message.reply("الرجاء إدخال الاسم الثلاثي بشكل صحيح.")
+    
+    state["full_name"] = message.text
+    state["step"] = "phone"
+    await message.answer("اكتب رقم جوالك (05XXXXXXXX):")
+
+@router.message(lambda m: user_states.get(m.from_user.id, {}).get("step") == "phone")
+async def get_phone(message: types.Message):
+    user_id = message.from_user.id
+    state = user_states[user_id]
+    
+    if not valid_phone(message.text):
+        return await message.reply("رقم الجوال غير صحيح.")
+    
+    state["phone_number"] = message.text
+    state["step"] = "city"
+    
+    await message.answer("اختر مدينتك:", reply_markup=city_keyboard())
+
+@router.callback_query(lambda c: c.data.startswith("city_"))
+async def choose_city(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    state = user_states[user_id]
+    
+    city = callback.data.replace("city_", "")
+    state["city"] = city
+    state["step"] = "neighborhood"
+    
+    await callback.message.answer("اختر الحي الذي تسكن فيه:", reply_markup=create_neighborhood_keyboard(city))
+
+@router.callback_query(lambda c: c.data.startswith("neigh_"))
+async def choose_neighborhood(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    state = user_states[user_id]
+    
+    neighborhood = callback.data.replace("neigh_", "")
+    state["neighborhood"] = neighborhood
+    
+    # حفظ العميل في DB
+    conn = get_conn()
+    cursor = conn.cursor()
+    
+    # تحقق إذا العميل موجود مسبقًا
+    cursor.execute("SELECT * FROM users WHERE telegram_id=%s", (user_id,))
+    existing = cursor.fetchone()
+    
+    if existing:
+        # تحديث بيانات العميل
+        cursor.execute("""
+            UPDATE users
+            SET subscription=%s, full_name=%s, phone_number=%s, city=%s, neighborhood=%s
+            WHERE telegram_id=%s
+        """, (state["subscription"], state["full_name"], state["phone_number"], state["city"], state["neighborhood"], user_id))
+    else:
+        # إضافة عميل جديد
+        cursor.execute("""
+            INSERT INTO users (telegram_id, role, subscription, full_name, phone_number, city, neighborhood)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+        """, (user_id, "client", state["subscription"], state["full_name"], state["phone_number"], state["city"], state["neighborhood"]))
+    
+    conn.commit()
+    conn.close()
+    
+    state["step"] = "done"
+    await callback.message.answer("تم حفظ بياناتك ✅\nانتظر الكابتن المتاح ليتم المطابقة.")
+    
+def register_handlers(dp):
+    dp.include_router(router)
