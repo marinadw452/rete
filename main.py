@@ -1,10 +1,10 @@
 import asyncio
 import json
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 import psycopg2
 import psycopg2.extras
 from config import BOT_TOKEN, PG_DB, PG_USER, PG_PASSWORD, PG_HOST, PG_PORT
@@ -38,63 +38,66 @@ class RegisterStates(StatesGroup):
     neighborhood = State()
     matching = State()
 
-# ================== Keyboards ==================
+# ================== Keyboards (Aiogram v3) ==================
 def start_keyboard():
-    kb = InlineKeyboardMarkup(row_width=2)
-    kb.add(InlineKeyboardButton("🚕 عميل", callback_data="role_client"),
-           InlineKeyboardButton("🧑‍✈️ كابتن", callback_data="role_captain"))
-    return kb
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🚕 عميل", callback_data="role_client")
+    builder.button(text="🧑‍✈️ كابتن", callback_data="role_captain")
+    builder.adjust(2)
+    return builder.as_markup()
 
 def subscription_keyboard():
-    kb = InlineKeyboardMarkup(row_width=2)
-    kb.add(InlineKeyboardButton("يومي", callback_data="sub_daily"),
-           InlineKeyboardButton("شهري", callback_data="sub_monthly"))
-    return kb
+    builder = InlineKeyboardBuilder()
+    builder.button(text="يومي", callback_data="sub_daily")
+    builder.button(text="شهري", callback_data="sub_monthly")
+    builder.adjust(2)
+    return builder.as_markup()
 
 def agreement_keyboard():
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("✅ موافق", callback_data="agree"))
-    return kb
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ موافق", callback_data="agree")
+    return builder.as_markup()
 
 def city_keyboard():
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("الرياض", callback_data="city_الرياض"))
-    kb.add(InlineKeyboardButton("جدة", callback_data="city_جدة"))
-    return kb
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🏙️ الرياض", callback_data="city_الرياض")
+    builder.button(text="🌆 جدة", callback_data="city_جدة")
+    builder.adjust(1)
+    return builder.as_markup()
 
 def neighborhood_keyboard(city):
-    kb = InlineKeyboardMarkup(row_width=3)
+    builder = InlineKeyboardBuilder()
     for n in neighborhoods_data.get(city, []):
-        kb.insert(InlineKeyboardButton(n, callback_data=f"neigh_{n}"))
-    return kb
+        builder.button(text=n, callback_data=f"neigh_{n}")
+    builder.adjust(3)
+    return builder.as_markup()
 
 def captain_choice_keyboard(captain_id):
-    kb = InlineKeyboardMarkup(row_width=2)
-    kb.add(
-        InlineKeyboardButton("✅ قبول", callback_data=f"accept_{captain_id}"),
-        InlineKeyboardButton("❌ رفض", callback_data=f"reject_{captain_id}")
-    )
-    return kb
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ قبول", callback_data=f"accept_{captain_id}")
+    builder.button(text="❌ رفض", callback_data=f"reject_{captain_id}")
+    builder.adjust(2)
+    return builder.as_markup()
 
 # ================== Bot setup ==================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 # ================== Handlers تسجيل المستخدم ==================
-@dp.message()
+@dp.message(F.text == "/start")
 async def start_handler(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("مرحباً! اختر دورك:", reply_markup=start_keyboard())
     await state.set_state(RegisterStates.role)
 
-@dp.callback_query()
+@dp.callback_query(RegisterStates.role)
 async def role_handler(callback: types.CallbackQuery, state: FSMContext):
     if callback.data in ["role_client", "role_captain"]:
         await state.update_data(role=callback.data.split("_")[1])
         await callback.message.answer("اختر الاشتراك:", reply_markup=subscription_keyboard())
         await state.set_state(RegisterStates.subscription)
 
-@dp.callback_query()
+@dp.callback_query(RegisterStates.subscription)
 async def subscription_handler(callback: types.CallbackQuery, state: FSMContext):
     if callback.data in ["sub_daily", "sub_monthly"]:
         await state.update_data(subscription=callback.data.split("_")[1])
@@ -168,8 +171,8 @@ async def agreement_handler(callback: types.CallbackQuery, state: FSMContext):
         conn = get_conn()
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO users (user_id, role, subscription, full_name, phone, car_model, car_plate, seats)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO users (user_id, role, subscription, full_name, phone, car_model, car_plate, seats, is_available)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,TRUE)
             ON CONFLICT (user_id) DO UPDATE
             SET role=EXCLUDED.role,
                 subscription=EXCLUDED.subscription,
@@ -177,7 +180,8 @@ async def agreement_handler(callback: types.CallbackQuery, state: FSMContext):
                 phone=EXCLUDED.phone,
                 car_model=EXCLUDED.car_model,
                 car_plate=EXCLUDED.car_plate,
-                seats=EXCLUDED.seats
+                seats=EXCLUDED.seats,
+                is_available=EXCLUDED.is_available
         """, (user_id, role, subscription, full_name, phone, car_model, car_plate, seats))
         conn.commit()
 
@@ -187,8 +191,6 @@ async def agreement_handler(callback: types.CallbackQuery, state: FSMContext):
             await callback.message.answer("اختر مدينتك:", reply_markup=city_keyboard())
             await state.set_state(RegisterStates.city)
         else:
-            cursor.execute("UPDATE users SET is_available=TRUE WHERE user_id=%s", (user_id,))
-            conn.commit()
             await callback.message.answer("يمكنك الآن استقبال طلبات العملاء.")
             await state.clear()
 
@@ -232,17 +234,13 @@ async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext)
 @dp.callback_query()
 async def captain_decision_handler(callback: types.CallbackQuery, state: FSMContext):
     data = callback.data
-    user_id = callback.from_user.id
-
     if data.startswith("accept_") or data.startswith("reject_"):
         captain_id = int(data.split("_")[1])
         conn = get_conn()
         cursor = conn.cursor()
 
         if data.startswith("accept_"):
-            # جعل الكابتن غير متاح
             cursor.execute("UPDATE users SET is_available=FALSE WHERE user_id=%s", (captain_id,))
-            # يمكن هنا إنشاء سجل في matches إذا أردت
             conn.commit()
             await callback.message.answer("✅ تم قبول الكابتن، بياناته مرسلة للعميل.")
         else:
