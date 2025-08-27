@@ -8,6 +8,8 @@ CREATE TABLE users (
     car_model TEXT,
     car_plate TEXT,
     seats INT,
+    city TEXT,
+    neighborhood TEXT,
     is_available BOOLEAN DEFAULT TRUE,
     agreed BOOLEAN DEFAULT FALSE
 );
