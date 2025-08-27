@@ -8,9 +8,6 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import psycopg2
 import psycopg2.extras
 from config import BOT_TOKEN, PG_DB, PG_USER, PG_PASSWORD, PG_HOST, PG_PORT
-from aiogram import types
-from aiogram.fsm.context import FSMContext
-from main import dp  # تأكد إن dp مستورد
 from database import update_match
 
 # ================== قاعدة البيانات ==================
@@ -42,7 +39,7 @@ class RegisterStates(StatesGroup):
     neighborhood = State()
     matching = State()
 
-# ================== Keyboards (Aiogram v3) ==================
+# ================== Keyboards ==================
 def start_keyboard():
     builder = InlineKeyboardBuilder()
     builder.button(text="🚕 عميل", callback_data="role_client")
@@ -94,151 +91,7 @@ async def start_handler(message: types.Message, state: FSMContext):
     await message.answer("مرحباً! اختر دورك:", reply_markup=start_keyboard())
     await state.set_state(RegisterStates.role)
 
-@dp.callback_query(RegisterStates.role)
-async def role_handler(callback: types.CallbackQuery, state: FSMContext):
-    if callback.data in ["role_client", "role_captain"]:
-        await state.update_data(role=callback.data.split("_")[1])
-        await callback.message.answer("اختر الاشتراك:", reply_markup=subscription_keyboard())
-        await state.set_state(RegisterStates.subscription)
-
-@dp.callback_query(RegisterStates.subscription)
-async def subscription_handler(callback: types.CallbackQuery, state: FSMContext):
-    if callback.data in ["sub_daily", "sub_monthly"]:
-        await state.update_data(subscription=callback.data.split("_")[1])
-        await callback.message.answer("أدخل اسمك الكامل:")
-        await state.set_state(RegisterStates.full_name)
-
-@dp.message(RegisterStates.full_name)
-async def full_name_handler(message: types.Message, state: FSMContext):
-    await state.update_data(full_name=message.text)
-    await message.answer("أدخل رقم جوالك:")
-    await state.set_state(RegisterStates.phone)
-
-@dp.message(RegisterStates.phone)
-async def phone_handler(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    role = data.get("role")
-    await state.update_data(phone=message.text)
-    if role == "captain":
-        await message.answer("أدخل نوع السيارة:")
-        await state.set_state(RegisterStates.car_model)
-    else:
-        await message.answer("⚖️ يرجى قراءة قوانين التوصيل في السعودية:")
-        await message.answer(
-            "1. الالتزام بمواعيد التوصيل.\n"
-            "2. الحفاظ على سلامة الركاب.\n"
-            "3. عدم قبول طلبات مشبوهة.\n"
-            "4. احترام القوانين المحلية."
-        )
-        await message.answer("اضغط موافق للمتابعة:", reply_markup=agreement_keyboard())
-        await state.set_state(RegisterStates.agreement)
-
-@dp.message(RegisterStates.car_model)
-async def car_model_handler(message: types.Message, state: FSMContext):
-    await state.update_data(car_model=message.text)
-    await message.answer("أدخل رقم لوحة السيارة:")
-    await state.set_state(RegisterStates.car_plate)
-
-@dp.message(RegisterStates.car_plate)
-async def car_plate_handler(message: types.Message, state: FSMContext):
-    await state.update_data(car_plate=message.text)
-    await message.answer("عدد الركاب المتاحين:")
-    await state.set_state(RegisterStates.seats)
-
-@dp.message(RegisterStates.seats)
-async def seats_handler(message: types.Message, state: FSMContext):
-    await state.update_data(seats=int(message.text))
-    await message.answer("⚖️ يرجى قراءة قوانين التوصيل في السعودية:")
-    await message.answer(
-        "1. الالتزام بمواعيد التوصيل.\n"
-        "2. الحفاظ على سلامة الركاب.\n"
-        "3. عدم قبول طلبات مشبوهة.\n"
-        "4. احترام القوانين المحلية."
-    )
-    await message.answer("اضغط موافق للمتابعة:", reply_markup=agreement_keyboard())
-    await state.set_state(RegisterStates.agreement)
-
-# ================== حفظ البيانات والمطابقة ==================
-@dp.callback_query(RegisterStates.agreement)
-async def agreement_handler(callback: types.CallbackQuery, state: FSMContext):
-    if callback.data == "agree":
-        data = await state.get_data()
-        user_id = callback.from_user.id
-        role = data.get("role")
-        subscription = data.get("subscription")
-        full_name = data.get("full_name")
-        phone = data.get("phone")
-        car_model = data.get("car_model", None)
-        car_plate = data.get("car_plate", None)
-        seats = data.get("seats", None)
-
-        conn = get_conn()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO users (user_id, role, subscription, full_name, phone, car_model, car_plate, seats, is_available)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,TRUE)
-            ON CONFLICT (user_id) DO UPDATE
-            SET role=EXCLUDED.role,
-                subscription=EXCLUDED.subscription,
-                full_name=EXCLUDED.full_name,
-                phone=EXCLUDED.phone,
-                car_model=EXCLUDED.car_model,
-                car_plate=EXCLUDED.car_plate,
-                seats=EXCLUDED.seats,
-                is_available=EXCLUDED.is_available
-        """, (user_id, role, subscription, full_name, phone, car_model, car_plate, seats))
-        conn.commit()
-
-        await callback.message.answer("✅ تم التسجيل بنجاح!")
-
-        if role == "client":
-            await callback.message.answer("اختر مدينتك:", reply_markup=city_keyboard())
-            await state.set_state(RegisterStates.city)
-        else:
-            await callback.message.answer("يمكنك الآن استقبال طلبات العملاء.")
-            await state.clear()
-
-        cursor.close()
-        conn.close()
-
-# ================== اختيار المدينة والحي ==================
-@dp.callback_query(RegisterStates.city)
-async def city_handler(callback: types.CallbackQuery, state: FSMContext):
-    city = callback.data.split("_")[1]
-    await state.update_data(city=city)
-    await callback.message.answer(f"اختر الحي في {city}:", reply_markup=neighborhood_keyboard(city))
-    await state.set_state(RegisterStates.neighborhood)
-
-# ================== اختيار الحي وعرض الكباتن ==================
-@dp.callback_query(RegisterStates.neighborhood)
-async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext):
-    neighborhood = callback.data.split("_")[1]
-    await state.update_data(neighborhood=neighborhood)
-
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM users
-        WHERE role='captain' AND is_available=TRUE
-    """)
-    captains = cursor.fetchall()
-    cursor.close()
-    conn.close()
-
-    if not captains:
-        await callback.message.answer("لا يوجد كباتن متاحين الآن. حاول لاحقاً.")
-    else:
-        for c in captains:
-            await callback.message.answer(
-                f"{c['full_name']} - {c['phone']}",
-                reply_markup=captain_choice_keyboard(c['user_id'])
-            )
-
-# ================== قبول/رفض الكابتن ==================
-from aiogram import types
-from aiogram.fsm.context import FSMContext
-from main import dp  # تأكد إن dp مستورد
-from database import update_match
+# ... (نفس الكود حق الـ handlers اللي كتبته فوق)
 
 @dp.callback_query()
 async def captain_decision_handler(callback: types.CallbackQuery, state: FSMContext):
@@ -255,10 +108,22 @@ async def captain_decision_handler(callback: types.CallbackQuery, state: FSMCont
             update_match(client_id, captain_id, "rejected")
             await callback.message.answer("❌ تم رفض الكابتن. يمكنك اختيار كابتن آخر.")
 
-        cursor.close()
-        conn.close()
+# ================== قبول/رفض الكابتن ==================
+@dp.callback_query()
+async def captain_decision_handler(callback: types.CallbackQuery, state: FSMContext):
+    data = callback.data
+    client_id = callback.from_user.id  # العميل الحالي
+
+    if data.startswith("accept_") or data.startswith("reject_"):
+        captain_id = int(data.split("_")[1])
+
+        if data.startswith("accept_"):
+            update_match(client_id, captain_id, "accepted")
+            await callback.message.answer("✅ تم قبول الكابتن، بياناته مرسلة للعميل.")
+        else:
+            update_match(client_id, captain_id, "rejected")
+            await callback.message.answer("❌ تم رفض الكابتن. يمكنك اختيار كابتن آخر.")
 
 # ================== Main ==================
 if __name__ == "__main__":
     asyncio.run(dp.start_polling(bot))
-
