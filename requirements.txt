@@ -1,6 +1,7 @@
 aiofiles==23.1.0
 aiohttp>=3.9.0,<4
 aiogram==3.1.0
+psycopg2-binary
 aiohappyeyeballs==2.6.1
 aiohttp==3.9.10
 aiosignal==1.4.0
@@ -44,6 +45,7 @@ tzlocal==5.3.1
 urllib3==2.5.0
 yarl==1.20.1
 # Removed typing-extensions and typing-inspection to fix conflicts
+
 
 
 
