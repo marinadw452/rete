@@ -147,7 +147,13 @@ async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext)
     await state.update_data(neighborhood=neigh)
     data = await state.get_data()
 
-    save_user(callback.from_user.id, data)
+    await state.update_data(city=city, neighborhood=neighborhood)
+await callback.message.answer("✅ تم حفظ بياناتك بنجاح!")
+# هنا فقط إذا كانت كل البيانات موجودة
+user_data = await state.get_data()
+if all(k in user_data for k in ["name", "phone", "role", "subscription", "city", "neighborhood"]):
+    save_user(callback.from_user.id, user_data)
+
 
     if data.get("role") == "client":
         captains = find_captains(data["city"], data["neighborhood"])
@@ -244,4 +250,5 @@ async def reject_client(callback: CallbackQuery):
 if __name__ == "__main__":
     init_db()
     asyncio.run(dp.start_polling(bot))
+
 
