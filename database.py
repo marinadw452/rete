@@ -1,6 +1,9 @@
 import psycopg2
 import psycopg2.extras
 from config import PG_DB, PG_USER, PG_PASSWORD, PG_HOST, PG_PORT
+from aiogram import types
+from aiogram.fsm.context import FSMContext
+from main import dp  # تأكد أن dp مستورد من ملف البوت الرئيسي
 
 def get_conn():
     return psycopg2.connect(
@@ -12,47 +15,73 @@ def get_conn():
         cursor_factory=psycopg2.extras.RealDictCursor
     )
 
-def init_db():
+# ================== إضافة مستخدم ==================
+def add_user(user_data: dict):
     conn = get_conn()
-    cursor = conn.cursor()
-    
-    # جدول المستخدمين
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        telegram_id BIGINT UNIQUE NOT NULL,
-        role VARCHAR(10) NOT NULL CHECK (role IN ('client','captain')),
-        subscription VARCHAR(10) NOT NULL CHECK (subscription IN ('daily','monthly')),
-        full_name VARCHAR(100) NOT NULL,
-        phone_number VARCHAR(20) NOT NULL,
-        car_type VARCHAR(50),
-        plate_number VARCHAR(20),
-        capacity INTEGER,
-        is_available BOOLEAN DEFAULT TRUE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
-    
-    # جدول الأحياء
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS neighborhoods (
-        id SERIAL PRIMARY KEY,
-        city VARCHAR(50) NOT NULL,
-        neighborhood VARCHAR(100) NOT NULL
-    );
-    """)
-    
-    # جدول المطابقات
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS matches (
-        id SERIAL PRIMARY KEY,
-        client_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        captain_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        status VARCHAR(10) NOT NULL CHECK (status IN ('pending','accepted','rejected')),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
-    
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO users (user_id, role, subscription, full_name, phone, car_model, car_plate, seats)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (user_id) DO NOTHING
+    """, (
+        user_data["user_id"],
+        user_data["role"],
+        user_data["subscription"],
+        user_data["full_name"],
+        user_data["phone"],
+        user_data.get("car_model"),
+        user_data.get("car_plate"),
+        user_data.get("seats")
+    ))
     conn.commit()
-    cursor.close()
+    cur.close()
     conn.close()
+
+# ================== جلب جميع الكباتن المتاحين ==================
+def get_available_captains(city: str, neighborhood: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT * FROM users
+        WHERE role='captain' AND is_available=TRUE
+    """)
+    captains = cur.fetchall()
+    cur.close()
+    conn.close()
+    return captains
+
+# ================== قبول/رفض الكابتن ==================
+@dp.callback_query()
+async def captain_decision_handler(callback: types.CallbackQuery, state: FSMContext):
+    data = callback.data
+    client_id = callback.from_user.id  # العميل الحالي
+
+    if data.startswith("accept_") or data.startswith("reject_"):
+        captain_id = int(data.split("_")[1])
+        conn = get_conn()
+        cursor = conn.cursor()
+
+        if data.startswith("accept_"):
+            # جعل الكابتن غير متاح
+            cursor.execute("UPDATE users SET is_available=FALSE WHERE user_id=%s", (captain_id,))
+            
+            # تسجيل المطابقة
+            cursor.execute("""
+                INSERT INTO matches (client_id, captain_id, status)
+                VALUES (%s, %s, 'accepted')
+            """, (client_id, captain_id))
+            conn.commit()
+            
+            await callback.message.answer("✅ تم قبول الكابتن، بياناته مرسلة للعميل.")
+        else:
+            # تسجيل رفض العميل للكابتن
+            cursor.execute("""
+                INSERT INTO matches (client_id, captain_id, status)
+                VALUES (%s, %s, 'rejected')
+            """, (client_id, captain_id))
+            conn.commit()
+
+            await callback.message.answer("❌ تم رفض الكابتن. يمكنك اختيار كابتن آخر.")
+
+        cursor.close()
+        conn.close()
