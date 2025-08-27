@@ -7,7 +7,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import BOT_TOKEN
 from database import init_db, save_user, find_captains, update_match
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
 # ================== تحميل الأحياء ==================
 with open("neighborhoods.json", "r", encoding="utf-8") as f:
@@ -147,13 +146,7 @@ async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext)
     await state.update_data(neighborhood=neigh)
     data = await state.get_data()
 
-    await state.update_data(city=city, neighborhood=neighborhood)
-await callback.message.answer("✅ تم حفظ بياناتك بنجاح!")
-# هنا فقط إذا كانت كل البيانات موجودة
-user_data = await state.get_data()
-if all(k in user_data for k in ["name", "phone", "role", "subscription", "city", "neighborhood"]):
-    save_user(callback.from_user.id, user_data)
-
+    save_user(callback.from_user.id, data)
 
     if data.get("role") == "client":
         captains = find_captains(data["city"], data["neighborhood"])
@@ -170,85 +163,19 @@ if all(k in user_data for k in ["name", "phone", "role", "subscription", "city",
 
     await state.clear()
 
-# ========== العميل يختار كابتن ==========
-@router.callback_query(F.data.startswith("choose_captain:"))
-async def handle_choose_captain(callback: CallbackQuery):
-    captain_id = int(callback.data.split(":")[1])
-    client_id = callback.from_user.id
+@dp.callback_query(F.data.startswith("accept_"))
+async def accept_handler(callback: types.CallbackQuery, state: FSMContext):
+    captain_id = int(callback.data.split("_")[1])
+    update_match(callback.from_user.id, captain_id, "accepted")
+    await callback.message.answer("✅ تم قبول الكابتن!")
 
-    cursor.execute(
-        "SELECT name, phone, city, neighborhood, subscription FROM users WHERE user_id = %s",
-        (client_id,)
-    )
-    client = cursor.fetchone()
-
-    if not client:
-        await callback.message.answer("❌ لم يتم العثور على بياناتك.")
-        return
-
-    client_name, client_phone, city, neighborhood, subscription = client
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ موافق", callback_data=f"accept_client:{client_id}")],
-        [InlineKeyboardButton(text="❌ رفض", callback_data=f"reject_client:{client_id}")]
-    ])
-
-    await bot.send_message(
-        captain_id,
-        f"🚗 لديك طلب جديد من عميل:\n\n"
-        f"👤 الاسم: {client_name}\n"
-        f"📞 الجوال: {client_phone}\n"
-        f"🏙️ المدينة: {city}\n"
-        f"📍 الحي: {neighborhood}\n"
-        f"💳 الاشتراك: {subscription}\n\n"
-        "هل ترغب بقبول الطلب؟",
-        reply_markup=kb
-    )
-
-    await callback.answer("✅ تم إرسال الطلب للكابتن، بانتظار رده.")
-
-
-# ========== الكابتن يوافق ==========
-@router.callback_query(F.data.startswith("accept_client:"))
-async def accept_client(callback: CallbackQuery):
-    client_id = int(callback.data.split(":")[1])
-    captain_id = callback.from_user.id
-
-    # تحديث حالة الكابتن
-    cursor.execute("UPDATE users SET available = FALSE WHERE user_id = %s", (captain_id,))
-    conn.commit()
-
-    # حفظ المطابقة
-    cursor.execute(
-        "INSERT INTO matches (client_id, captain_id, status) VALUES (%s, %s, %s)",
-        (client_id, captain_id, "accepted")
-    )
-    conn.commit()
-
-    await bot.send_message(client_id, "✅ الكابتن وافق على طلبك! سيتم التواصل معك 🚕")
-    await callback.message.edit_text("✅ تم قبول الطلب وإشعار العميل.")
-
-
-# ========== الكابتن يرفض ==========
-@router.callback_query(F.data.startswith("reject_client:"))
-async def reject_client(callback: CallbackQuery):
-    client_id = int(callback.data.split(":")[1])
-    captain_id = callback.from_user.id
-
-    # حفظ الرفض
-    cursor.execute(
-        "INSERT INTO matches (client_id, captain_id, status) VALUES (%s, %s, %s)",
-        (client_id, captain_id, "rejected")
-    )
-    conn.commit()
-
-    await bot.send_message(client_id, "❌ الكابتن رفض طلبك. جرب كابتن آخر.")
-    await callback.message.edit_text("❌ تم رفض الطلب.")
-
+@dp.callback_query(F.data.startswith("reject_"))
+async def reject_handler(callback: types.CallbackQuery, state: FSMContext):
+    captain_id = int(callback.data.split("_")[1])
+    update_match(callback.from_user.id, captain_id, "rejected")
+    await callback.message.answer("❌ تم رفض الكابتن.")
 
 # ================== Main ==================
 if __name__ == "__main__":
     init_db()
     asyncio.run(dp.start_polling(bot))
-
-
