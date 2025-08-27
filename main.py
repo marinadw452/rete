@@ -8,6 +8,10 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import psycopg2
 import psycopg2.extras
 from config import BOT_TOKEN, PG_DB, PG_USER, PG_PASSWORD, PG_HOST, PG_PORT
+from aiogram import types
+from aiogram.fsm.context import FSMContext
+from main import dp  # تأكد إن dp مستورد
+from database import update_match
 
 # ================== قاعدة البيانات ==================
 def get_conn():
@@ -231,19 +235,24 @@ async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext)
             )
 
 # ================== قبول/رفض الكابتن ==================
+from aiogram import types
+from aiogram.fsm.context import FSMContext
+from main import dp  # تأكد إن dp مستورد
+from database import update_match
+
 @dp.callback_query()
 async def captain_decision_handler(callback: types.CallbackQuery, state: FSMContext):
     data = callback.data
+    client_id = callback.from_user.id  # العميل الحالي
+
     if data.startswith("accept_") or data.startswith("reject_"):
         captain_id = int(data.split("_")[1])
-        conn = get_conn()
-        cursor = conn.cursor()
 
         if data.startswith("accept_"):
-            cursor.execute("UPDATE users SET is_available=FALSE WHERE user_id=%s", (captain_id,))
-            conn.commit()
+            update_match(client_id, captain_id, "accepted")
             await callback.message.answer("✅ تم قبول الكابتن، بياناته مرسلة للعميل.")
         else:
+            update_match(client_id, captain_id, "rejected")
             await callback.message.answer("❌ تم رفض الكابتن. يمكنك اختيار كابتن آخر.")
 
         cursor.close()
@@ -252,3 +261,4 @@ async def captain_decision_handler(callback: types.CallbackQuery, state: FSMCont
 # ================== Main ==================
 if __name__ == "__main__":
     asyncio.run(dp.start_polling(bot))
+
