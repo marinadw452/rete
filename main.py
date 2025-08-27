@@ -9,7 +9,7 @@ import psycopg2
 import psycopg2.extras
 from config import BOT_TOKEN, PG_DB, PG_USER, PG_PASSWORD, PG_HOST, PG_PORT
 from database import update_match
-
+from database import init_db
 # ================== قاعدة البيانات ==================
 def get_conn():
     return psycopg2.connect(
@@ -127,3 +127,4 @@ async def captain_decision_handler(callback: types.CallbackQuery, state: FSMCont
 # ================== Main ==================
 if __name__ == "__main__":
     asyncio.run(dp.start_polling(bot))
+
