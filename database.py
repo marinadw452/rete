@@ -1,9 +1,6 @@
 import psycopg2
 import psycopg2.extras
 from config import PG_DB, PG_USER, PG_PASSWORD, PG_HOST, PG_PORT
-from aiogram import types
-from aiogram.fsm.context import FSMContext
-from main import dp  # تأكد أن dp مستورد من ملف البوت الرئيسي
 
 def get_conn():
     return psycopg2.connect(
@@ -15,14 +12,23 @@ def get_conn():
         cursor_factory=psycopg2.extras.RealDictCursor
     )
 
-# ================== إضافة مستخدم ==================
+# ================== إضافة/تحديث مستخدم ==================
 def add_user(user_data: dict):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO users (user_id, role, subscription, full_name, phone, car_model, car_plate, seats)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (user_id) DO NOTHING
+        INSERT INTO users (user_id, role, subscription, full_name, phone, car_model, car_plate, seats, city, neighborhood)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (user_id) DO UPDATE SET
+            role = EXCLUDED.role,
+            subscription = EXCLUDED.subscription,
+            full_name = EXCLUDED.full_name,
+            phone = EXCLUDED.phone,
+            car_model = EXCLUDED.car_model,
+            car_plate = EXCLUDED.car_plate,
+            seats = EXCLUDED.seats,
+            city = EXCLUDED.city,
+            neighborhood = EXCLUDED.neighborhood
     """, (
         user_data["user_id"],
         user_data["role"],
@@ -31,57 +37,44 @@ def add_user(user_data: dict):
         user_data["phone"],
         user_data.get("car_model"),
         user_data.get("car_plate"),
-        user_data.get("seats")
+        user_data.get("seats"),
+        user_data.get("city"),
+        user_data.get("neighborhood")
     ))
     conn.commit()
     cur.close()
     conn.close()
 
 # ================== جلب جميع الكباتن المتاحين ==================
-def get_available_captains(city: str, neighborhood: str):
+def get_available_captains(city: str, neighborhood: str, client_id: int):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         SELECT * FROM users
-        WHERE role='captain' AND is_available=TRUE
-    """)
+        WHERE role='captain' 
+          AND is_available=TRUE
+          AND city=%s 
+          AND neighborhood=%s
+          AND user_id NOT IN (
+              SELECT captain_id FROM matches WHERE client_id=%s AND status='rejected'
+          )
+    """, (city, neighborhood, client_id))
     captains = cur.fetchall()
     cur.close()
     conn.close()
     return captains
 
-# ================== قبول/رفض الكابتن ==================
-@dp.callback_query()
-async def captain_decision_handler(callback: types.CallbackQuery, state: FSMContext):
-    data = callback.data
-    client_id = callback.from_user.id  # العميل الحالي
-
-    if data.startswith("accept_") or data.startswith("reject_"):
-        captain_id = int(data.split("_")[1])
-        conn = get_conn()
-        cursor = conn.cursor()
-
-        if data.startswith("accept_"):
-            # جعل الكابتن غير متاح
-            cursor.execute("UPDATE users SET is_available=FALSE WHERE user_id=%s", (captain_id,))
-            
-            # تسجيل المطابقة
-            cursor.execute("""
-                INSERT INTO matches (client_id, captain_id, status)
-                VALUES (%s, %s, 'accepted')
-            """, (client_id, captain_id))
-            conn.commit()
-            
-            await callback.message.answer("✅ تم قبول الكابتن، بياناته مرسلة للعميل.")
-        else:
-            # تسجيل رفض العميل للكابتن
-            cursor.execute("""
-                INSERT INTO matches (client_id, captain_id, status)
-                VALUES (%s, %s, 'rejected')
-            """, (client_id, captain_id))
-            conn.commit()
-
-            await callback.message.answer("❌ تم رفض الكابتن. يمكنك اختيار كابتن آخر.")
-
-        cursor.close()
-        conn.close()
+# ================== تحديث حالة المطابقة ==================
+def update_match(client_id: int, captain_id: int, status: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    # إذا قبل العميل الكابتن
+    if status == "accepted":
+        cur.execute("UPDATE users SET is_available=FALSE WHERE user_id=%s", (captain_id,))
+    cur.execute("""
+        INSERT INTO matches (client_id, captain_id, status)
+        VALUES (%s, %s, %s)
+    """, (client_id, captain_id, status))
+    conn.commit()
+    cur.close()
+    conn.close()
