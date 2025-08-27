@@ -78,3 +78,4 @@ def update_match(client_id: int, captain_id: int, status: str):
     conn.commit()
     cur.close()
     conn.close()
+print("✅ الجداول جاهزة")
