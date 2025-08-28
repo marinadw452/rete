@@ -20,4 +20,6 @@ CREATE TABLE matches (
     client_id BIGINT REFERENCES users(user_id),
     captain_id BIGINT REFERENCES users(user_id),
     status VARCHAR(10) DEFAULT 'pending'
+    ALTER TABLE matches ADD CONSTRAINT unique_match UNIQUE (client_id, captain_id);
+
 );
