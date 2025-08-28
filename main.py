@@ -142,15 +142,22 @@ async def city_handler(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("neigh_"))
 async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext):
-    # ✅ استخدم replace بدل split عشان ناخذ النص كامل حتى لو فيه مسافات
     neigh = callback.data.replace("neigh_", "")
     await state.update_data(neighborhood=neigh)
     data = await state.get_data()
+
+    # ✅ Debug: اطبع البيانات بعد اختيار الحي
+    print("📌 User registered data:", data)
 
     save_user(callback.from_user.id, data)
 
     if data.get("role") == "client":
         captains = find_captains(data["city"], data["neighborhood"])
+
+        # ✅ Debug: اطبع شروط البحث والنتيجة
+        print("🔍 Searching captains in:", data["city"], data["neighborhood"])
+        print("🎯 Found captains:", captains)
+
         if captains:
             for cap in captains:
                 await callback.message.answer(
@@ -181,4 +188,5 @@ async def reject_handler(callback: types.CallbackQuery, state: FSMContext):
 if __name__ == "__main__":
     init_db()
     asyncio.run(dp.start_polling(bot))
+
 
