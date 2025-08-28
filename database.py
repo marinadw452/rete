@@ -93,18 +93,7 @@ def find_captains(city, neighborhood):
     conn.close()
     return rows
 
-# database.py
 def update_match(client_id, captain_id, status):
-    # هنا تدخل أو تحدّث حالة الربط في جدول matches
-    # مثال:
-    cursor.execute("""
-        INSERT INTO matches (client_id, captain_id, status)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (client_id, captain_id) DO UPDATE SET status = EXCLUDED.status
-    """, (client_id, captain_id, status))
-    conn.commit()
-
-    cur.close()def update_match(client_id, captain_id, status):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -114,6 +103,4 @@ def update_match(client_id, captain_id, status):
     """, (client_id, captain_id, status))
     conn.commit()
     cur.close()
-    conn.close()
-
     conn.close()
