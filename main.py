@@ -175,18 +175,46 @@ async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext)
 @dp.callback_query(F.data.startswith("accept_"))
 async def accept_handler(callback: types.CallbackQuery, state: FSMContext):
     captain_id = int(callback.data.split("_")[1])
-    update_match(callback.from_user.id, captain_id, "accepted")
-    await callback.message.answer("✅ تم قبول الكابتن!")
-
+    update_match(callback.from_user.id, captain_id, "pending")
+    await bot.send_message(
+        captain_id,
+        f"📩 تم اختيارك من قبل عميل. اضغط ✅ للقبول أو ❌ للرفض.",
+        reply_markup=captain_choice_keyboard(callback.from_user.id)
+    )
+    await callback.message.answer("✅ تم إرسال إشعار للكابتن، انتظر الرد...")
+    
 @dp.callback_query(F.data.startswith("reject_"))
 async def reject_handler(callback: types.CallbackQuery, state: FSMContext):
     captain_id = int(callback.data.split("_")[1])
     update_match(callback.from_user.id, captain_id, "rejected")
     await callback.message.answer("❌ تم رفض الكابتن.")
 
+@dp.callback_query(F.data.startswith("cap_accept_"))
+async def captain_accept_handler(callback: types.CallbackQuery):
+    client_id = int(callback.data.split("_")[2])  # فرضاً: cap_accept_{client_id}
+    captain_id = callback.from_user.id
+    
+    # تحديث جدول matches
+    update_match(client_id, captain_id, "accepted")
+    
+    # إشعار العميل
+    await bot.send_message(client_id, f"✅ الكابتن وافق على التوصيل!")
+    await callback.message.answer("✅ لقد وافقت على العميل.")
+
+@dp.callback_query(F.data.startswith("cap_reject_"))
+async def captain_reject_handler(callback: types.CallbackQuery):
+    client_id = int(callback.data.split("_")[2])
+    captain_id = callback.from_user.id
+    
+    update_match(client_id, captain_id, "rejected")
+    
+    await bot.send_message(client_id, f"❌ الكابتن رفض التوصيل.")
+    await callback.message.answer("❌ لقد رفضت العميل.")
+
 # ================== Main ==================
 if __name__ == "__main__":
     init_db()
     asyncio.run(dp.start_polling(bot))
+
 
 
