@@ -66,6 +66,13 @@ def captain_choice_keyboard(captain_id):
     builder.button(text="❌ رفض", callback_data=f"reject_{captain_id}")
     builder.adjust(2)
     return builder.as_markup()
+    
+def captain_reply_keyboard(client_id):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ قبول", callback_data=f"cap_accept_{client_id}")
+    builder.button(text="❌ رفض", callback_data=f"cap_reject_{client_id}")
+    builder.adjust(2)
+    return builder.as_markup()
 
 # ================== Bot setup ==================
 bot = Bot(token=BOT_TOKEN)
@@ -176,12 +183,16 @@ async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext)
 async def accept_handler(callback: types.CallbackQuery, state: FSMContext):
     captain_id = int(callback.data.split("_")[1])
     update_match(callback.from_user.id, captain_id, "pending")
+
+    # إرسال رسالة للكابتن مع أزرار الرد
     await bot.send_message(
         captain_id,
         f"📩 تم اختيارك من قبل عميل. اضغط ✅ للقبول أو ❌ للرفض.",
-        reply_markup=captain_choice_keyboard(callback.from_user.id)
+        reply_markup=captain_reply_keyboard(callback.from_user.id)
     )
+
     await callback.message.answer("✅ تم إرسال إشعار للكابتن، انتظر الرد...")
+
     
 @dp.callback_query(F.data.startswith("reject_"))
 async def reject_handler(callback: types.CallbackQuery, state: FSMContext):
@@ -215,6 +226,7 @@ async def captain_reject_handler(callback: types.CallbackQuery):
 if __name__ == "__main__":
     init_db()
     asyncio.run(dp.start_polling(bot))
+
 
 
 
