@@ -104,5 +104,16 @@ def update_match(client_id, captain_id, status):
     """, (client_id, captain_id, status))
     conn.commit()
 
+    cur.close()def update_match(client_id, captain_id, status):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO matches (client_id, captain_id, status)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (client_id, captain_id) DO UPDATE SET status = EXCLUDED.status
+    """, (client_id, captain_id, status))
+    conn.commit()
     cur.close()
+    conn.close()
+
     conn.close()
