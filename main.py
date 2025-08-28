@@ -24,7 +24,6 @@ class RegisterStates(StatesGroup):
     agreement = State()
     city = State()
     neighborhood = State()
-    matching = State()
 
 # ================== Keyboards ==================
 def start_keyboard():
@@ -60,14 +59,7 @@ def neighborhood_keyboard(city):
     builder.adjust(3)
     return builder.as_markup()
 
-def captain_choice_keyboard(captain_id):
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✅ قبول", callback_data=f"accept_{captain_id}")
-    builder.button(text="❌ رفض", callback_data=f"reject_{captain_id}")
-    builder.adjust(2)
-    return builder.as_markup()
-
-def captain_reply_keyboard(client_id):
+def captain_choice_keyboard(client_id):
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ قبول", callback_data=f"cap_accept_{client_id}")
     builder.button(text="❌ رفض", callback_data=f"cap_reject_{client_id}")
@@ -78,7 +70,7 @@ def captain_reply_keyboard(client_id):
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# ================== Handlers ==================
+# ================== Handlers التسجيل ==================
 @dp.message(F.text == "/start")
 async def start_handler(message: types.Message, state: FSMContext):
     await state.clear()
@@ -113,10 +105,7 @@ async def phone_handler(message: types.Message, state: FSMContext):
         await message.answer("🚘 أدخل موديل السيارة:")
         await state.set_state(RegisterStates.car_model)
     else:
-        await message.answer(
-            "📜 القوانين: الالتزام بأنظمة التوصيل في السعودية.\nاضغط موافق للمتابعة.",
-            reply_markup=agreement_keyboard()
-        )
+        await message.answer("📜 القوانين: الالتزام بأنظمة التوصيل في السعودية.\nاضغط موافق للمتابعة.", reply_markup=agreement_keyboard())
         await state.set_state(RegisterStates.agreement)
 
 @dp.message(RegisterStates.car_model)
@@ -134,10 +123,7 @@ async def car_plate_handler(message: types.Message, state: FSMContext):
 @dp.message(RegisterStates.seats)
 async def seats_handler(message: types.Message, state: FSMContext):
     await state.update_data(seats=int(message.text))
-    await message.answer(
-        "📜 القوانين: الالتزام بأنظمة التوصيل في السعودية.\nاضغط موافق للمتابعة.",
-        reply_markup=agreement_keyboard()
-    )
+    await message.answer("📜 القوانين: الالتزام بأنظمة التوصيل في السعودية.\nاضغط موافق للمتابعة.", reply_markup=agreement_keyboard())
     await state.set_state(RegisterStates.agreement)
 
 @dp.callback_query(F.data == "agree")
@@ -153,25 +139,28 @@ async def city_handler(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("🏘️ اختر الحي:", reply_markup=neighborhood_keyboard(city))
     await state.set_state(RegisterStates.neighborhood)
 
+# ================== اختيار الحي ==================
 @dp.callback_query(F.data.startswith("neigh_"))
 async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext):
     neigh = callback.data.replace("neigh_", "")
     await state.update_data(neighborhood=neigh)
     data = await state.get_data()
 
-    print("📌 User registered data:", data)
     save_user(callback.from_user.id, data)
 
     if data.get("role") == "client":
         captains = find_captains(data["city"], data["neighborhood"])
-        print("🔍 Searching captains in:", data["city"], data["neighborhood"])
-        print("🎯 Found captains:", captains)
         if captains:
             for cap in captains:
-                await callback.message.answer(
-                    f"كابتن متاح: {cap['full_name']} 🚘 {cap['car_model']} ({cap['car_plate']})\nمقاعد: {cap['seats']}",
-                    reply_markup=captain_choice_keyboard(cap["user_id"])
+                # إنشاء مطابقة مبدئية
+                update_match(callback.from_user.id, cap["user_id"], "pending")
+                # إرسال رسالة للكابتن
+                await bot.send_message(
+                    cap["user_id"],
+                    f"📩 تم اختيارك من قبل عميل: {data['full_name']} 🚕",
+                    reply_markup=captain_choice_keyboard(callback.from_user.id)
                 )
+            await callback.message.answer("✅ تم إرسال إشعار للكباتن، انتظر الرد...")
         else:
             await callback.message.answer("🚫 لا يوجد كباتن متاحين حالياً.")
     else:
@@ -179,33 +168,13 @@ async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext)
 
     await state.clear()
 
-# ================== اختيار الكابتن من العميل ==================
-@dp.callback_query(F.data.startswith("accept_"))
-async def accept_handler(callback: types.CallbackQuery, state: FSMContext):
-    captain_id = int(callback.data.split("_")[1])
-    update_match(callback.from_user.id, captain_id, "pending")
-
-    await bot.send_message(
-        captain_id,
-        f"📩 تم اختيارك من قبل عميل. اضغط ✅ للقبول أو ❌ للرفض.",
-        reply_markup=captain_reply_keyboard(callback.from_user.id)
-    )
-
-    await callback.message.answer("✅ تم إرسال إشعار للكابتن، انتظر الرد...")
-
-@dp.callback_query(F.data.startswith("reject_"))
-async def reject_handler(callback: types.CallbackQuery, state: FSMContext):
-    captain_id = int(callback.data.split("_")[1])
-    update_match(callback.from_user.id, captain_id, "rejected")
-    await callback.message.answer("❌ تم رفض الكابتن.")
-
-# ================== رد الكابتن ==================
+# ================== قبول / رفض من الكابتن ==================
 @dp.callback_query(F.data.startswith("cap_accept_"))
 async def captain_accept_handler(callback: types.CallbackQuery):
     client_id = int(callback.data.split("_")[2])
     captain_id = callback.from_user.id
     update_match(client_id, captain_id, "accepted")
-    await bot.send_message(client_id, f"✅ الكابتن وافق على التوصيل!")
+    await bot.send_message(client_id, "✅ الكابتن وافق على التوصيل!")
     await callback.message.answer("✅ لقد وافقت على العميل.")
 
 @dp.callback_query(F.data.startswith("cap_reject_"))
@@ -213,7 +182,7 @@ async def captain_reject_handler(callback: types.CallbackQuery):
     client_id = int(callback.data.split("_")[2])
     captain_id = callback.from_user.id
     update_match(client_id, captain_id, "rejected")
-    await bot.send_message(client_id, f"❌ الكابتن رفض التوصيل.")
+    await bot.send_message(client_id, "❌ الكابتن رفض التوصيل.")
     await callback.message.answer("❌ لقد رفضت العميل.")
 
 # ================== Main ==================
