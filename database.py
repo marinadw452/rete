@@ -2,6 +2,7 @@ import psycopg2
 import psycopg2.extras
 from config import PG_DB, PG_USER, PG_PASSWORD, PG_HOST, PG_PORT
 
+# ================== الاتصال بالداتا بيس ==================
 def get_conn():
     return psycopg2.connect(
         dbname=PG_DB,
@@ -12,10 +13,12 @@ def get_conn():
         cursor_factory=psycopg2.extras.RealDictCursor
     )
 
+# ================== تهيئة الجداول ==================
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
+    # جدول المستخدمين
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
@@ -33,12 +36,14 @@ def init_db():
     )
     """)
 
+    # جدول المطابقات مع قيد UNIQUE
     cur.execute("""
     CREATE TABLE IF NOT EXISTS matches (
         id SERIAL PRIMARY KEY,
         client_id BIGINT REFERENCES users(user_id),
         captain_id BIGINT REFERENCES users(user_id),
-        status VARCHAR(20) DEFAULT 'pending'
+        status VARCHAR(20) DEFAULT 'pending',
+        UNIQUE(client_id, captain_id)
     )
     """)
 
@@ -46,6 +51,7 @@ def init_db():
     cur.close()
     conn.close()
 
+# ================== حفظ/تحديث المستخدم ==================
 def save_user(user_id, data):
     conn = get_conn()
     cur = conn.cursor()
@@ -81,6 +87,7 @@ def save_user(user_id, data):
     cur.close()
     conn.close()
 
+# ================== البحث عن كباتن متاحين ==================
 def find_captains(city, neighborhood):
     conn = get_conn()
     cur = conn.cursor()
@@ -93,6 +100,7 @@ def find_captains(city, neighborhood):
     conn.close()
     return rows
 
+# ================== تحديث/إضافة حالة المطابقة ==================
 def update_match(client_id, captain_id, status):
     conn = get_conn()
     cur = conn.cursor()
