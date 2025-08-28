@@ -142,7 +142,8 @@ async def city_handler(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("neigh_"))
 async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext):
-    neigh = callback.data.split("_")[1]
+    # ✅ استخدم replace بدل split عشان ناخذ النص كامل حتى لو فيه مسافات
+    neigh = callback.data.replace("neigh_", "")
     await state.update_data(neighborhood=neigh)
     data = await state.get_data()
 
@@ -163,6 +164,7 @@ async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext)
 
     await state.clear()
 
+
 @dp.callback_query(F.data.startswith("accept_"))
 async def accept_handler(callback: types.CallbackQuery, state: FSMContext):
     captain_id = int(callback.data.split("_")[1])
@@ -179,3 +181,4 @@ async def reject_handler(callback: types.CallbackQuery, state: FSMContext):
 if __name__ == "__main__":
     init_db()
     asyncio.run(dp.start_polling(bot))
+
