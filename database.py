@@ -52,24 +52,26 @@ def init_db():
 
 # حفظ مستخدم جديد أو تحديثه
 def save_user(user_id, data):
-    conn = get_conn()
+    conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
+    
     cur.execute("""
-        INSERT INTO users (user_id, role, subscription, full_name, phone, car_model, car_plate, seats, city, neighborhood, available, agreement, username)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (user_id) DO UPDATE SET
-            role=EXCLUDED.role,
-            subscription=EXCLUDED.subscription,
-            full_name=EXCLUDED.full_name,
-            phone=EXCLUDED.phone,
-            car_model=EXCLUDED.car_model,
-            car_plate=EXCLUDED.car_plate,
-            seats=EXCLUDED.seats,
-            city=EXCLUDED.city,
-            neighborhood=EXCLUDED.neighborhood,
-            available=EXCLUDED.available,
-            agreement=EXCLUDED.agreement,
-            username=EXCLUDED.username
+        INSERT INTO users (user_id, role, subscription, full_name, phone, 
+                           car_model, car_plate, seats, city, neighborhood, available, agreement, username)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (user_id) DO UPDATE
+        SET role = EXCLUDED.role,
+            subscription = EXCLUDED.subscription,
+            full_name = EXCLUDED.full_name,
+            phone = EXCLUDED.phone,
+            car_model = EXCLUDED.car_model,
+            car_plate = EXCLUDED.car_plate,
+            seats = EXCLUDED.seats,
+            city = EXCLUDED.city,
+            neighborhood = EXCLUDED.neighborhood,
+            available = EXCLUDED.available,
+            agreement = EXCLUDED.agreement,
+            username = EXCLUDED.username;
     """, (
         user_id,
         data.get("role"),
@@ -83,11 +85,13 @@ def save_user(user_id, data):
         data.get("neighborhood"),
         data.get("available", True),
         data.get("agreement", False),
-        data.get("username")
+        getattr(data.get("username"), "strip", lambda: None)()  # إذا موجود، أضف username، وإلا None
     ))
+    
     conn.commit()
     cur.close()
     conn.close()
+
 
 # البحث عن الكباتن المتاحين في نفس المدينة والحي
 def find_captains(city, neighborhood):
