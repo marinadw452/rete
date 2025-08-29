@@ -24,7 +24,7 @@ class RegisterStates(StatesGroup):
     agreement = State()
     city = State()
     neighborhood = State()
-    destination = State()   # ⬅️ جديد: للعميل يكتب الوجهة
+    destination = State()   # للعميل يكتب الوجهة
 
 # ================== Keyboards ==================
 def start_keyboard():
@@ -106,7 +106,10 @@ async def phone_handler(message: types.Message, state: FSMContext):
         await message.answer("🚘 أدخل موديل السيارة:")
         await state.set_state(RegisterStates.car_model)
     else:
-        await message.answer("📜 القوانين: الالتزام بأنظمة التوصيل في السعودية.\nاضغط موافق للمتابعة.", reply_markup=agreement_keyboard())
+        await message.answer(
+            "📜 القوانين: الالتزام بأنظمة التوصيل في السعودية.\nاضغط موافق للمتابعة.",
+            reply_markup=agreement_keyboard()
+        )
         await state.set_state(RegisterStates.agreement)
 
 @dp.message(RegisterStates.car_model)
@@ -124,7 +127,10 @@ async def car_plate_handler(message: types.Message, state: FSMContext):
 @dp.message(RegisterStates.seats)
 async def seats_handler(message: types.Message, state: FSMContext):
     await state.update_data(seats=int(message.text))
-    await message.answer("📜 القوانين: الالتزام بأنظمة التوصيل في السعودية.\nاضغط موافق للمتابعة.", reply_markup=agreement_keyboard())
+    await message.answer(
+        "📜 القوانين: الالتزام بأنظمة التوصيل في السعودية.\nاضغط موافق للمتابعة.",
+        reply_markup=agreement_keyboard()
+    )
     await state.set_state(RegisterStates.agreement)
 
 @dp.callback_query(F.data == "agree")
@@ -140,7 +146,6 @@ async def city_handler(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("🏘️ اختر الحي:", reply_markup=neighborhood_keyboard(city))
     await state.set_state(RegisterStates.neighborhood)
 
-# ================== اختيار الحي ==================
 @dp.callback_query(F.data.startswith("neigh_"))
 async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext):
     neigh = callback.data.replace("neigh_", "")
@@ -148,30 +153,26 @@ async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext)
     data = await state.get_data()
 
     if data.get("role") == "client":
-        # اطلب من العميل الوجهة
         await callback.message.answer("📍 اكتب وجهتك الآن:")
         await state.set_state(RegisterStates.destination)
     else:
         save_user(callback.from_user.id, data)
-        await callback.message.answer("✅ تم تسجيلك ككابتن. سيتم إشعارك عند اختيارك من عميل.")
+        await callback.message.answer(
+            "✅ تم تسجيلك ككابتن. سيتم إشعارك عند اختيارك من عميل."
+        )
         await state.clear()
 
-# ================== العميل يكتب الوجهة ==================
 @dp.message(RegisterStates.destination)
 async def destination_handler(message: types.Message, state: FSMContext):
     await state.update_data(destination=message.text)
     data = await state.get_data()
 
-    # حفظ العميل
     save_user(message.from_user.id, data)
-
-    # ابحث عن الكباتن
     captains = find_captains(data["city"], data["neighborhood"])
+
     if captains:
         for cap in captains:
-            # إنشاء مطابقة مبدئية
             update_match(message.from_user.id, cap["user_id"], "pending")
-            # إرسال رسالة للكابتن مع الوجهة
             await bot.send_message(
                 cap["user_id"],
                 f"📩 عميل اختارك: {data['full_name']}\n"
@@ -186,28 +187,19 @@ async def destination_handler(message: types.Message, state: FSMContext):
 
     await state.clear()
 
-# ================== قبول / رفض من الكابتن ==================
 @dp.callback_query(F.data.startswith("cap_accept_"))
 async def captain_accept_handler(callback: types.CallbackQuery):
     client_id = int(callback.data.split("_")[2])
     captain_id = callback.from_user.id
-
     update_match(client_id, captain_id, "accepted")
-
-    # جملة للعميل مع رابط مباشر للكابتن
-    caption = (
-        f"✅ الكابتن وافق على التوصيل وسيصلك قريباً 🚕\n\n"
-        f"تواصل مباشرة مع الكابتن: [اضغط هنا](tg://user?id={captain_id})"
-    )
 
     await bot.send_message(
         client_id,
-        caption,
-        parse_mode="Markdown"   # عشان يفعل الرابط الأزرق
+        f"✅ الكابتن وافق على التوصيل وسيصلك قريباً 🚕\n\n"
+        f"تواصل مباشرة مع الكابتن: [اضغط هنا](tg://user?id={captain_id})",
+        parse_mode="Markdown"
     )
-
     await callback.message.answer("✅ لقد وافقت على العميل.")
-
 
 @dp.callback_query(F.data.startswith("cap_reject_"))
 async def captain_reject_handler(callback: types.CallbackQuery):
@@ -221,4 +213,3 @@ async def captain_reject_handler(callback: types.CallbackQuery):
 if __name__ == "__main__":
     init_db()
     asyncio.run(dp.start_polling(bot))
-
