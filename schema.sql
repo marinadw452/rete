@@ -1,7 +1,7 @@
--- جدول المستخدمين
+-- إنشاء جدول المستخدمين إذا لم يكن موجود
 CREATE TABLE IF NOT EXISTS users (
     user_id BIGINT PRIMARY KEY,
-    role VARCHAR(10) NOT NULL,          -- captain / client
+    role VARCHAR(10) NOT NULL,
     subscription VARCHAR(20),
     full_name TEXT,
     phone TEXT,
@@ -10,12 +10,12 @@ CREATE TABLE IF NOT EXISTS users (
     seats INT,
     city TEXT,
     neighborhood TEXT,
-    available BOOLEAN DEFAULT TRUE,     -- متاح للتوصيل
-    agreement BOOLEAN DEFAULT FALSE,    -- وافق على الشروط
-    username TEXT                       -- لحفظ @username للتواصل المباشر
+    available BOOLEAN DEFAULT TRUE,
+    agreement BOOLEAN DEFAULT FALSE,
+    username TEXT
 );
 
--- جدول المطابقات
+-- إنشاء جدول المطابقات إذا لم يكن موجود
 CREATE TABLE IF NOT EXISTS matches (
     id SERIAL PRIMARY KEY,
     client_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
