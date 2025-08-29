@@ -51,6 +51,8 @@ def init_db():
     print("✅ قاعدة البيانات جاهزة!")
 
 # حفظ مستخدم جديد أو تحديثه
+print("DEBUG:", data)  # قبل save_user
+
 def save_user(user_id, data):
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
