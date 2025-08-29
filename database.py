@@ -2,7 +2,6 @@ import psycopg2
 import psycopg2.extras
 from config import PG_DB, PG_USER, PG_PASSWORD, PG_HOST, PG_PORT
 
-# ================== الاتصال بالداتا بيس ==================
 def get_conn():
     return psycopg2.connect(
         dbname=PG_DB,
@@ -13,7 +12,6 @@ def get_conn():
         cursor_factory=psycopg2.extras.RealDictCursor
     )
 
-# ================== تهيئة الجداول ==================
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
@@ -22,7 +20,7 @@ def init_db():
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
-        role VARCHAR(10) NOT NULL,
+        role VARCHAR(10) NOT NULL, -- captain / client
         subscription VARCHAR(20),
         full_name TEXT,
         phone TEXT,
@@ -32,18 +30,19 @@ def init_db():
         agreement BOOLEAN DEFAULT FALSE,
         city TEXT,
         neighborhood TEXT,
-        available BOOLEAN DEFAULT TRUE
+        available BOOLEAN DEFAULT TRUE,
+        username TEXT -- عشان نرجع نستخدمه كرابط
     )
     """)
 
-    # جدول المطابقات مع قيد UNIQUE
+    # جدول المطابقات
     cur.execute("""
     CREATE TABLE IF NOT EXISTS matches (
         id SERIAL PRIMARY KEY,
-        client_id BIGINT REFERENCES users(user_id),
-        captain_id BIGINT REFERENCES users(user_id),
+        client_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
+        captain_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
         status VARCHAR(20) DEFAULT 'pending',
-        UNIQUE(client_id, captain_id)
+        UNIQUE(client_id, captain_id) -- ما يتكرر نفس الثنائي
     )
     """)
 
@@ -51,13 +50,17 @@ def init_db():
     cur.close()
     conn.close()
 
-# ================== حفظ/تحديث المستخدم ==================
+# حفظ المستخدم
 def save_user(user_id, data):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO users (user_id, role, subscription, full_name, phone, car_model, car_plate, seats, agreement, city, neighborhood, available)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE)
+        INSERT INTO users (
+            user_id, role, subscription, full_name, phone,
+            car_model, car_plate, seats, agreement, city,
+            neighborhood, available, username
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s)
         ON CONFLICT (user_id) DO UPDATE SET
             role=EXCLUDED.role,
             subscription=EXCLUDED.subscription,
@@ -69,7 +72,8 @@ def save_user(user_id, data):
             agreement=EXCLUDED.agreement,
             city=EXCLUDED.city,
             neighborhood=EXCLUDED.neighborhood,
-            available=TRUE
+            available=TRUE,
+            username=EXCLUDED.username
     """, (
         user_id,
         data.get("role"),
@@ -82,12 +86,13 @@ def save_user(user_id, data):
         data.get("agreement"),
         data.get("city"),
         data.get("neighborhood"),
+        data.get("username"),
     ))
     conn.commit()
     cur.close()
     conn.close()
 
-# ================== البحث عن كباتن متاحين ==================
+# إيجاد الكباتن
 def find_captains(city, neighborhood):
     conn = get_conn()
     cur = conn.cursor()
@@ -100,15 +105,15 @@ def find_captains(city, neighborhood):
     conn.close()
     return rows
 
-# ================== تحديث/إضافة حالة المطابقة ==================
+# تحديث حالة الماتش
 def update_match(client_id, captain_id, status):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO matches (client_id, captain_id, status)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (client_id, captain_id) DO UPDATE SET status = EXCLUDED.status
-    """, (client_id, captain_id, status))
+        UPDATE matches
+        SET status=%s
+        WHERE client_id=%s AND captain_id=%s
+    """, (status, client_id, captain_id))
     conn.commit()
     cur.close()
     conn.close()
