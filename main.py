@@ -191,9 +191,23 @@ async def destination_handler(message: types.Message, state: FSMContext):
 async def captain_accept_handler(callback: types.CallbackQuery):
     client_id = int(callback.data.split("_")[2])
     captain_id = callback.from_user.id
+
     update_match(client_id, captain_id, "accepted")
-    await bot.send_message(client_id, "✅ الكابتن وافق على التوصيل وسيصلك قريباً 🚕")
+
+    # جملة للعميل مع رابط مباشر للكابتن
+    caption = (
+        f"✅ الكابتن وافق على التوصيل وسيصلك قريباً 🚕\n\n"
+        f"تواصل مباشرة مع الكابتن: [اضغط هنا](tg://user?id={captain_id})"
+    )
+
+    await bot.send_message(
+        client_id,
+        caption,
+        parse_mode="Markdown"   # عشان يفعل الرابط الأزرق
+    )
+
     await callback.message.answer("✅ لقد وافقت على العميل.")
+
 
 @dp.callback_query(F.data.startswith("cap_reject_"))
 async def captain_reject_handler(callback: types.CallbackQuery):
@@ -207,3 +221,4 @@ async def captain_reject_handler(callback: types.CallbackQuery):
 if __name__ == "__main__":
     init_db()
     asyncio.run(dp.start_polling(bot))
+
