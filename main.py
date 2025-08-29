@@ -24,7 +24,7 @@ class RegisterStates(StatesGroup):
     agreement = State()
     city = State()
     neighborhood = State()
-    matching = State()
+    destination = State()   # ⬅️ جديد: للعميل يكتب الوجهة
 
 # ================== Keyboards ==================
 def start_keyboard():
@@ -60,14 +60,7 @@ def neighborhood_keyboard(city):
     builder.adjust(3)
     return builder.as_markup()
 
-def captain_choice_keyboard(captain_id):
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✅ قبول", callback_data=f"accept_{captain_id}")
-    builder.button(text="❌ رفض", callback_data=f"reject_{captain_id}")
-    builder.adjust(2)
-    return builder.as_markup()
-
-def captain_reply_keyboard(client_id):
+def captain_choice_keyboard(client_id):
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ قبول", callback_data=f"cap_accept_{client_id}")
     builder.button(text="❌ رفض", callback_data=f"cap_reject_{client_id}")
@@ -78,7 +71,7 @@ def captain_reply_keyboard(client_id):
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# ================== Handlers ==================
+# ================== Handlers التسجيل ==================
 @dp.message(F.text == "/start")
 async def start_handler(message: types.Message, state: FSMContext):
     await state.clear()
@@ -113,10 +106,7 @@ async def phone_handler(message: types.Message, state: FSMContext):
         await message.answer("🚘 أدخل موديل السيارة:")
         await state.set_state(RegisterStates.car_model)
     else:
-        await message.answer(
-            "📜 القوانين: الالتزام بأنظمة التوصيل في السعودية.\nاضغط موافق للمتابعة.",
-            reply_markup=agreement_keyboard()
-        )
+        await message.answer("📜 القوانين: الالتزام بأنظمة التوصيل في السعودية.\nاضغط موافق للمتابعة.", reply_markup=agreement_keyboard())
         await state.set_state(RegisterStates.agreement)
 
 @dp.message(RegisterStates.car_model)
@@ -134,10 +124,7 @@ async def car_plate_handler(message: types.Message, state: FSMContext):
 @dp.message(RegisterStates.seats)
 async def seats_handler(message: types.Message, state: FSMContext):
     await state.update_data(seats=int(message.text))
-    await message.answer(
-        "📜 القوانين: الالتزام بأنظمة التوصيل في السعودية.\nاضغط موافق للمتابعة.",
-        reply_markup=agreement_keyboard()
-    )
+    await message.answer("📜 القوانين: الالتزام بأنظمة التوصيل في السعودية.\nاضغط موافق للمتابعة.", reply_markup=agreement_keyboard())
     await state.set_state(RegisterStates.agreement)
 
 @dp.callback_query(F.data == "agree")
@@ -160,25 +147,42 @@ async def neighborhood_handler(callback: types.CallbackQuery, state: FSMContext)
     await state.update_data(neighborhood=neigh)
     data = await state.get_data()
 
-    save_user(callback.from_user.id, data)
-
     if data.get("role") == "client":
-        captains = find_captains(data["city"], data["neighborhood"])
-        if captains:
-            for cap in captains:
-                # إنشاء مطابقة مبدئية
-                update_match(callback.from_user.id, cap["user_id"], "pending")
-                # إرسال رسالة للكابتن
-                await bot.send_message(
-                    cap["user_id"],
-                    f"📩 تم اختيارك من قبل عميل: {data['full_name']} 🚕",
-                    reply_markup=captain_choice_keyboard(callback.from_user.id)
-                )
-            await callback.message.answer("✅ تم إرسال إشعار للكباتن، انتظر الرد...")
-        else:
-            await callback.message.answer("🚫 لا يوجد كباتن متاحين حالياً.")
+        # اطلب من العميل الوجهة
+        await callback.message.answer("📍 اكتب وجهتك الآن:")
+        await state.set_state(RegisterStates.destination)
     else:
+        save_user(callback.from_user.id, data)
         await callback.message.answer("✅ تم تسجيلك ككابتن. سيتم إشعارك عند اختيارك من عميل.")
+        await state.clear()
+
+# ================== العميل يكتب الوجهة ==================
+@dp.message(RegisterStates.destination)
+async def destination_handler(message: types.Message, state: FSMContext):
+    await state.update_data(destination=message.text)
+    data = await state.get_data()
+
+    # حفظ العميل
+    save_user(message.from_user.id, data)
+
+    # ابحث عن الكباتن
+    captains = find_captains(data["city"], data["neighborhood"])
+    if captains:
+        for cap in captains:
+            # إنشاء مطابقة مبدئية
+            update_match(message.from_user.id, cap["user_id"], "pending")
+            # إرسال رسالة للكابتن مع الوجهة
+            await bot.send_message(
+                cap["user_id"],
+                f"📩 عميل اختارك: {data['full_name']}\n"
+                f"📱 رقم: {data['phone']}\n"
+                f"🏘️ من حي: {data['neighborhood']}\n"
+                f"📍 الوجهة: {data['destination']}",
+                reply_markup=captain_choice_keyboard(message.from_user.id)
+            )
+        await message.answer("✅ تم إرسال إشعار للكباتن، انتظر الرد...")
+    else:
+        await message.answer("🚫 لا يوجد كباتن متاحين حالياً.")
 
     await state.clear()
 
@@ -188,7 +192,7 @@ async def captain_accept_handler(callback: types.CallbackQuery):
     client_id = int(callback.data.split("_")[2])
     captain_id = callback.from_user.id
     update_match(client_id, captain_id, "accepted")
-    await bot.send_message(client_id, "✅ الكابتن وافق على التوصيل!")
+    await bot.send_message(client_id, "✅ الكابتن وافق على التوصيل وسيصلك قريباً 🚕")
     await callback.message.answer("✅ لقد وافقت على العميل.")
 
 @dp.callback_query(F.data.startswith("cap_reject_"))
