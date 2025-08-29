@@ -10,9 +10,9 @@ CREATE TABLE IF NOT EXISTS users (
     seats INT,
     city TEXT,
     neighborhood TEXT,
-    available BOOLEAN DEFAULT TRUE,     -- موحد الاسم (بدل is_available)
-    agreement BOOLEAN DEFAULT FALSE,    -- بدل agreed
-    username TEXT                       -- لحفظ @username للتواصل
+    available BOOLEAN DEFAULT TRUE,     -- متاح للتوصيل
+    agreement BOOLEAN DEFAULT FALSE,    -- وافق على الشروط
+    username TEXT                       -- لحفظ @username للتواصل المباشر
 );
 
 -- جدول المطابقات
@@ -23,6 +23,3 @@ CREATE TABLE IF NOT EXISTS matches (
     status VARCHAR(20) DEFAULT 'pending',
     CONSTRAINT unique_match UNIQUE (client_id, captain_id)
 );
-
--- إضافة العمود username إذا غير موجود
-ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT;
