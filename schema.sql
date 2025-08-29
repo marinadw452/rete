@@ -23,3 +23,4 @@ CREATE TABLE IF NOT EXISTS matches (
     status VARCHAR(20) DEFAULT 'pending',
     CONSTRAINT unique_match UNIQUE (client_id, captain_id)
 );
+ALTER TABLE users ADD COLUMN username TEXT;
