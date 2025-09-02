@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  # قاعدة البيانات PostgreSQL
+  postgres:
+    image: postgres:15
+    container_name: taktak_postgres
+    environment:
+      POSTGRES_DB: taktak_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: taktak123
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - taktak_network
+    restart: unless-stopped
+
+  # بوت طقطق
+  taktak_bot:
+    build: .
+    container_name: taktak_bot
+    depends_on:
+      - postgres
+    environment:
+      - BOT_TOKEN=YOUR_BOT_TOKEN_HERE
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_DB=taktak_db
+      - PG_USER=postgres
+      - PG_PASSWORD=taktak123
+    volumes:
+      - ./neighborhoods.json:/app/neighborhoods.json:ro
+      - ./logs:/app/logs
+    networks:
+      - taktak_network
+    restart: unless-stopped
+    command: ["python", "main.py"]
+
+  # أدمين قاعدة البيانات (اختياري)
+  adminer:
+    image: adminer
+    container_name: taktak_adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    networks:
+      - taktak_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  taktak_network:
+    driver: bridge
