@@ -626,3 +626,488 @@ async def handle_client_cancellation(callback: types.CallbackQuery):
 
     # إشعار الكابتن بالإلغاء
     await bot.send_message(
+        captain_id,
+        f"ℹ️ تم إلغاء الطلب من قبل العميل\n"
+        f"يمكنك استقبال طلبات أخرى الآن"
+    )
+
+# ================== أزرار المستخدم المسجل ==================
+def main_menu_keyboard(role):
+    """القائمة الرئيسية للمستخدم المسجل"""
+    builder = InlineKeyboardBuilder()
+    
+    if role == "client":
+        builder.button(text="🚕 طلب توصيلة", callback_data="request_ride")
+        builder.button(text="🏘️ تغيير الوجهة", callback_data="change_destination")
+    else:  # captain
+        builder.button(text="🟢 متاح للتوصيل", callback_data="set_available")
+        builder.button(text="🔴 غير متاح", callback_data="set_unavailable")
+        builder.button(text="📍 تغيير المنطقة", callback_data="change_location")
+    
+    builder.button(text="⚙️ تعديل البيانات", callback_data="edit_profile")
+    builder.button(text="📊 إحصائياتي", callback_data="my_stats")
+    builder.adjust(2, 1)
+    return builder.as_markup()
+
+def edit_profile_keyboard(role):
+    """أزرار تعديل البيانات"""
+    builder = InlineKeyboardBuilder()
+    
+    builder.button(text="👤 تعديل الاسم", callback_data="edit_name")
+    builder.button(text="📱 تعديل الجوال", callback_data="edit_phone")
+    
+    if role == "captain":
+        builder.button(text="🚘 تعديل السيارة", callback_data="edit_car")
+        builder.button(text="🚪 تعديل المقاعد", callback_data="edit_seats")
+    
+    builder.button(text="🌆 تغيير المدينة", callback_data="edit_city")
+    builder.button(text="🏘️ تغيير الحي", callback_data="edit_neighborhood")
+    builder.button(text="🔙 العودة للقائمة", callback_data="back_to_main")
+    builder.adjust(2)
+    return builder.as_markup()
+
+def destination_keyboard(city):
+    """أزرار اختيار الوجهة للعميل"""
+    try:
+        with open("neighborhoods.json", "r", encoding="utf-8") as f:
+            neighborhoods_data = json.load(f)
+            
+        builder = InlineKeyboardBuilder()
+        builder.button(text="📍 نفس المنطقة", callback_data="dest_same")
+        
+        for neighborhood in neighborhoods_data.get(city, []):
+            builder.button(text=neighborhood, callback_data=f"dest_{neighborhood}")
+        
+        builder.button(text="🔙 رجوع", callback_data="back_to_main")
+        builder.adjust(2)
+        return builder.as_markup()
+        
+    except FileNotFoundError:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="❌ ملف الأحياء غير موجود", callback_data="error_no_file")
+        return builder.as_markup()
+
+# ================== حالات التعديل ==================
+class EditStates(StatesGroup):
+    edit_name = State()
+    edit_phone = State()
+    edit_car_model = State()
+    edit_car_plate = State()
+    edit_seats = State()
+    change_city = State()
+    change_neighborhood = State()
+    select_destination = State()
+
+# ================== دوال مساعدة ==================
+def is_user_registered(user_id):
+    """التحقق من تسجيل المستخدم"""
+    user = get_user_by_id(user_id)
+    return user is not None
+
+def update_user_field(user_id, field, value):
+    """تحديث حقل واحد في بيانات المستخدم"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(f"UPDATE users SET {field}=%s WHERE user_id=%s", (value, user_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def get_user_stats(user_id):
+    """جلب إحصائيات المستخدم"""
+    conn = get_conn()
+    cur = conn.cursor()
+    
+    user = get_user_by_id(user_id)
+    if not user:
+        return None
+    
+    if user['role'] == 'client':
+        cur.execute("""
+            SELECT 
+                COUNT(*) as total_requests,
+                COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_trips,
+                COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_requests
+            FROM matches WHERE client_id = %s
+        """, (user_id,))
+    else:
+        cur.execute("""
+            SELECT 
+                COUNT(*) as total_requests,
+                COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_trips,
+                COUNT(CASE WHEN status = 'captain_accepted' THEN 1 END) as accepted_requests
+            FROM matches WHERE captain_id = %s
+        """, (user_id,))
+    
+    stats = cur.fetchone()
+    cur.close()
+    conn.close()
+    return stats
+
+# ================== معالجات المستخدم المسجل ==================
+
+@dp.message(F.text == "/start")
+async def start_command(message: types.Message, state: FSMContext):
+    """بداية التسجيل أو القائمة الرئيسية"""
+    await state.clear()
+    user_id = message.from_user.id
+    
+    # التحقق من تسجيل المستخدم
+    if is_user_registered(user_id):
+        user = get_user_by_id(user_id)
+        role_text = "العميل" if user['role'] == 'client' else "الكابتن"
+        
+        welcome_back = f"""
+🎉 أهلاً وسهلاً {user['full_name']}!
+
+أنت مسجل كـ {role_text} في منطقة:
+📍 {user['city']} - {user['neighborhood']}
+
+اختر العملية المطلوبة:
+        """
+        
+        await message.answer(welcome_back, reply_markup=main_menu_keyboard(user['role']))
+    else:
+        # مستخدم جديد - عرض شاشة التسجيل
+        welcome_text = """
+🌟 مرحباً بك في نظام طقطق للمواصلات 🌟
+
+اختر دورك في النظام:
+🚕 العميل: يطلب توصيلة
+🧑‍✈️ الكابتن: يقدم خدمة التوصيل
+        """
+        await message.answer(welcome_text, reply_markup=start_keyboard())
+        await state.set_state(RegisterStates.role)
+
+# ================== معالجات القائمة الرئيسية ==================
+
+@dp.callback_query(F.data == "request_ride")
+async def request_ride_handler(callback: types.CallbackQuery, state: FSMContext):
+    """طلب توصيلة جديدة"""
+    user = get_user_by_id(callback.from_user.id)
+    if not user:
+        await callback.answer("❌ خطأ في البيانات", show_alert=True)
+        return
+    
+    await callback.message.edit_text(
+        f"📍 موقعك الحالي: {user['city']} - {user['neighborhood']}\n\n"
+        f"🎯 اختر الوجهة التي تريد الذهاب إليها:",
+        reply_markup=destination_keyboard(user['city'])
+    )
+    await state.set_state(EditStates.select_destination)
+
+@dp.callback_query(F.data.startswith("dest_"))
+async def handle_destination_selection(callback: types.CallbackQuery, state: FSMContext):
+    """معالج اختيار الوجهة"""
+    destination = callback.data.replace("dest_", "")
+    user = get_user_by_id(callback.from_user.id)
+    
+    if destination == "same":
+        # نفس المنطقة
+        search_neighborhood = user['neighborhood']
+        destination_text = f"{user['city']} - {user['neighborhood']}"
+    else:
+        # منطقة مختلفة
+        search_neighborhood = destination
+        destination_text = f"{user['city']} - {destination}"
+    
+    await callback.message.edit_text(
+        f"🎯 الوجهة المختارة: {destination_text}\n\n"
+        f"🔍 جاري البحث عن الكباتن المتاحين..."
+    )
+    
+    await search_for_captains(callback.message, user['city'], search_neighborhood)
+    await state.clear()
+
+@dp.callback_query(F.data == "change_destination")
+async def change_destination_handler(callback: types.CallbackQuery, state: FSMContext):
+    """تغيير الوجهة"""
+    await request_ride_handler(callback, state)
+
+@dp.callback_query(F.data == "set_available")
+async def set_captain_available(callback: types.CallbackQuery):
+    """تعيين الكابتن كمتاح"""
+    user_id = callback.from_user.id
+    update_user_field(user_id, "is_available", True)
+    
+    await callback.message.edit_text(
+        "🟢 تم تعيينك كمتاح للتوصيل!\n\n"
+        "سيتم إشعارك عند وصول طلبات جديدة...",
+        reply_markup=main_menu_keyboard("captain")
+    )
+
+@dp.callback_query(F.data == "set_unavailable")
+async def set_captain_unavailable(callback: types.CallbackQuery):
+    """تعيين الكابتن كغير متاح"""
+    user_id = callback.from_user.id
+    update_user_field(user_id, "is_available", False)
+    
+    await callback.message.edit_text(
+        "🔴 تم تعيينك كغير متاح للتوصيل\n\n"
+        "لن تصلك طلبات جديدة حتى تقوم بتفعيل الحالة مرة أخرى",
+        reply_markup=main_menu_keyboard("captain")
+    )
+
+@dp.callback_query(F.data == "change_location")
+async def change_captain_location(callback: types.CallbackQuery, state: FSMContext):
+    """تغيير منطقة الكابتن"""
+    await callback.message.edit_text(
+        "📍 تغيير المنطقة\n\n🌆 اختر المدينة الجديدة:",
+        reply_markup=city_keyboard()
+    )
+    await state.set_state(EditStates.change_city)
+
+@dp.callback_query(F.data == "edit_profile")
+async def edit_profile_handler(callback: types.CallbackQuery):
+    """تعديل البيانات الشخصية"""
+    user = get_user_by_id(callback.from_user.id)
+    if not user:
+        await callback.answer("❌ خطأ في البيانات", show_alert=True)
+        return
+    
+    profile_info = f"""
+👤 بياناتك الحالية:
+
+📛 الاسم: {user['full_name']}
+📱 الجوال: {user['phone']}
+📍 المنطقة: {user['city']} - {user['neighborhood']}
+    """
+    
+    if user['role'] == 'captain':
+        profile_info += f"""
+🚘 السيارة: {user['car_model']}
+🔢 اللوحة: {user['car_plate']}
+🚪 المقاعد: {user['seats']}
+        """
+    
+    profile_info += "\n\nاختر البيان الذي تريد تعديله:"
+    
+    await callback.message.edit_text(
+        profile_info,
+        reply_markup=edit_profile_keyboard(user['role'])
+    )
+
+@dp.callback_query(F.data == "my_stats")
+async def show_user_stats(callback: types.CallbackQuery):
+    """عرض إحصائيات المستخدم"""
+    user = get_user_by_id(callback.from_user.id)
+    stats = get_user_stats(callback.from_user.id)
+    
+    if not user or not stats:
+        await callback.answer("❌ لا توجد إحصائيات", show_alert=True)
+        return
+    
+    if user['role'] == 'client':
+        stats_text = f"""
+📊 إحصائياتك كعميل:
+
+🔢 إجمالي الطلبات: {stats['total_requests']}
+✅ الرحلات المكتملة: {stats['completed_trips']}
+⏳ الطلبات المعلقة: {stats['pending_requests']}
+        """
+    else:
+        stats_text = f"""
+📊 إحصائياتك ككابتن:
+
+🔢 إجمالي الطلبات: {stats['total_requests']}
+✅ الرحلات المكتملة: {stats['completed_trips']}
+👍 الطلبات المقبولة: {stats['accepted_requests']}
+🔄 حالتك: {"متاح" if user['is_available'] else "غير متاح"}
+        """
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 العودة للقائمة", callback_data="back_to_main")
+    
+    await callback.message.edit_text(stats_text, reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data == "back_to_main")
+async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
+    """العودة للقائمة الرئيسية"""
+    await state.clear()
+    user = get_user_by_id(callback.from_user.id)
+    
+    role_text = "العميل" if user['role'] == 'client' else "الكابتن"
+    status_text = ""
+    
+    if user['role'] == 'captain':
+        status_text = f"\n🟢 الحالة: {'متاح' if user['is_available'] else 'غير متاح'}"
+    
+    main_menu_text = f"""
+🏠 القائمة الرئيسية
+
+👤 {user['full_name']} ({role_text})
+📍 {user['city']} - {user['neighborhood']}{status_text}
+
+اختر العملية المطلوبة:
+    """
+    
+    await callback.message.edit_text(
+        main_menu_text,
+        reply_markup=main_menu_keyboard(user['role'])
+    )
+
+# ================== معالجات تعديل البيانات ==================
+
+@dp.callback_query(F.data == "edit_name")
+async def edit_name_handler(callback: types.CallbackQuery, state: FSMContext):
+    """تعديل الاسم"""
+    await callback.message.edit_text("👤 أدخل الاسم الجديد:")
+    await state.set_state(EditStates.edit_name)
+
+@dp.message(EditStates.edit_name)
+async def handle_new_name(message: types.Message, state: FSMContext):
+    """معالج الاسم الجديد"""
+    update_user_field(message.from_user.id, "full_name", message.text)
+    await message.answer("✅ تم تحديث الاسم بنجاح!")
+    
+    # العودة لقائمة التعديل
+    user = get_user_by_id(message.from_user.id)
+    await message.answer(
+        "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
+        reply_markup=edit_profile_keyboard(user['role'])
+    )
+    await state.clear()
+
+@dp.callback_query(F.data == "edit_phone")
+async def edit_phone_handler(callback: types.CallbackQuery, state: FSMContext):
+    """تعديل الجوال"""
+    await callback.message.edit_text("📱 أدخل رقم الجوال الجديد:")
+    await state.set_state(EditStates.edit_phone)
+
+@dp.message(EditStates.edit_phone)
+async def handle_new_phone(message: types.Message, state: FSMContext):
+    """معالج رقم الجوال الجديد"""
+    update_user_field(message.from_user.id, "phone", message.text)
+    await message.answer("✅ تم تحديث رقم الجوال بنجاح!")
+    
+    user = get_user_by_id(message.from_user.id)
+    await message.answer(
+        "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
+        reply_markup=edit_profile_keyboard(user['role'])
+    )
+    await state.clear()
+
+@dp.callback_query(F.data == "edit_car")
+async def edit_car_handler(callback: types.CallbackQuery, state: FSMContext):
+    """تعديل بيانات السيارة"""
+    await callback.message.edit_text("🚘 أدخل موديل السيارة الجديد:")
+    await state.set_state(EditStates.edit_car_model)
+
+@dp.message(EditStates.edit_car_model)
+async def handle_new_car_model(message: types.Message, state: FSMContext):
+    """معالج موديل السيارة الجديد"""
+    await state.update_data(new_car_model=message.text)
+    await message.answer("🔢 أدخل رقم اللوحة الجديد:")
+    await state.set_state(EditStates.edit_car_plate)
+
+@dp.message(EditStates.edit_car_plate)
+async def handle_new_car_plate(message: types.Message, state: FSMContext):
+    """معالج رقم اللوحة الجديد"""
+    data = await state.get_data()
+    
+    # تحديث بيانات السيارة
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE users SET car_model=%s, car_plate=%s 
+        WHERE user_id=%s
+    """, (data['new_car_model'], message.text, message.from_user.id))
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    await message.answer("✅ تم تحديث بيانات السيارة بنجاح!")
+    
+    user = get_user_by_id(message.from_user.id)
+    await message.answer(
+        "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
+        reply_markup=edit_profile_keyboard(user['role'])
+    )
+    await state.clear()
+
+@dp.callback_query(F.data == "edit_seats")
+async def edit_seats_handler(callback: types.CallbackQuery, state: FSMContext):
+    """تعديل عدد المقاعد"""
+    await callback.message.edit_text("🚪 أدخل عدد المقاعد الجديد:")
+    await state.set_state(EditStates.edit_seats)
+
+@dp.message(EditStates.edit_seats)
+async def handle_new_seats(message: types.Message, state: FSMContext):
+    """معالج عدد المقاعد الجديد"""
+    try:
+        seats = int(message.text)
+        if seats < 1 or seats > 8:
+            await message.answer("❌ عدد المقاعد يجب أن يكون بين 1 و 8")
+            return
+            
+        update_user_field(message.from_user.id, "seats", seats)
+        await message.answer("✅ تم تحديث عدد المقاعد بنجاح!")
+        
+        user = get_user_by_id(message.from_user.id)
+        await message.answer(
+            "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
+            reply_markup=edit_profile_keyboard(user['role'])
+        )
+        await state.clear()
+    except ValueError:
+        await message.answer("❌ يرجى إدخال رقم صحيح")
+
+@dp.callback_query(F.data == "edit_city")
+async def edit_city_handler(callback: types.CallbackQuery, state: FSMContext):
+    """تعديل المدينة"""
+    await callback.message.edit_text(
+        "🌆 اختر المدينة الجديدة:",
+        reply_markup=city_keyboard()
+    )
+    await state.set_state(EditStates.change_city)
+
+# معالجات تغيير المدينة والحي (مشتركة مع الكابتن)
+@dp.callback_query(F.data.startswith("city_"), EditStates.change_city)
+async def handle_city_change(callback: types.CallbackQuery, state: FSMContext):
+    """معالج تغيير المدينة"""
+    city = callback.data.split("_")[1]
+    await state.update_data(new_city=city)
+    await callback.message.edit_text(
+        f"✅ المدينة الجديدة: {city}\n\n🏘️ اختر الحي الجديد:",
+        reply_markup=neighborhood_keyboard(city)
+    )
+    await state.set_state(EditStates.change_neighborhood)
+
+@dp.callback_query(F.data.startswith("neigh_"), EditStates.change_neighborhood)
+async def handle_neighborhood_change(callback: types.CallbackQuery, state: FSMContext):
+    """معالج تغيير الحي"""
+    neighborhood = callback.data.replace("neigh_", "")
+    data = await state.get_data()
+    new_city = data.get('new_city')
+    
+    # تحديث المدينة والحي
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE users SET city=%s, neighborhood=%s 
+        WHERE user_id=%s
+    """, (new_city, neighborhood, callback.from_user.id))
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    await callback.message.edit_text(
+        f"✅ تم تحديث المنطقة بنجاح!\n\n"
+        f"📍 المنطقة الجديدة: {new_city} - {neighborhood}"
+    )
+    
+    # العودة للقائمة الرئيسية
+    user = get_user_by_id(callback.from_user.id)
+    await asyncio.sleep(2)  # انتظار قصير
+    await callback.message.edit_text(
+        f"🏠 القائمة الرئيسية\n\n"
+        f"👤 {user['full_name']}\n"
+        f"📍 {new_city} - {neighborhood}",
+        reply_markup=main_menu_keyboard(user['role'])
+    )
+    await state.clear()
+
+# ================== تشغيل البوت ==================
+if __name__ == "__main__":
+    init_db()
+    asyncio.run(dp.start_polling(bot))
