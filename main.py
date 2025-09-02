@@ -186,6 +186,51 @@ def reset_captain_availability(captain_id):
     cur.close()
     conn.close()
 
+def is_user_registered(user_id):
+    """التحقق من تسجيل المستخدم"""
+    user = get_user_by_id(user_id)
+    return user is not None
+
+def update_user_field(user_id, field, value):
+    """تحديث حقل واحد في بيانات المستخدم"""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(f"UPDATE users SET {field}=%s WHERE user_id=%s", (value, user_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def get_user_stats(user_id):
+    """جلب إحصائيات المستخدم"""
+    conn = get_conn()
+    cur = conn.cursor()
+    
+    user = get_user_by_id(user_id)
+    if not user:
+        return None
+    
+    if user['role'] == 'client':
+        cur.execute("""
+            SELECT 
+                COUNT(*) as total_requests,
+                COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_trips,
+                COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_requests
+            FROM matches WHERE client_id = %s
+        """, (user_id,))
+    else:
+        cur.execute("""
+            SELECT 
+                COUNT(*) as total_requests,
+                COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_trips,
+                COUNT(CASE WHEN status = 'captain_accepted' THEN 1 END) as accepted_requests
+            FROM matches WHERE captain_id = %s
+        """, (user_id,))
+    
+    stats = cur.fetchone()
+    cur.close()
+    conn.close()
+    return stats
+
 # ================== حالات التسجيل ==================
 class RegisterStates(StatesGroup):
     role = State()
@@ -198,6 +243,16 @@ class RegisterStates(StatesGroup):
     agreement = State()
     city = State()
     neighborhood = State()
+
+class EditStates(StatesGroup):
+    edit_name = State()
+    edit_phone = State()
+    edit_car_model = State()
+    edit_car_plate = State()
+    edit_seats = State()
+    change_city = State()
+    change_neighborhood = State()
+    select_destination = State()
 
 # ================== أزرار التحكم ==================
 def start_keyboard():
@@ -277,6 +332,61 @@ def contact_captain_keyboard(captain_username):
         builder.button(text="💬 تواصل مع الكابتن", url=f"https://t.me/{captain_username}")
     return builder.as_markup()
 
+def main_menu_keyboard(role):
+    """القائمة الرئيسية للمستخدم المسجل"""
+    builder = InlineKeyboardBuilder()
+    
+    if role == "client":
+        builder.button(text="🚕 طلب توصيلة", callback_data="request_ride")
+        builder.button(text="🏘️ تغيير الوجهة", callback_data="change_destination")
+    else:  # captain
+        builder.button(text="🟢 متاح للتوصيل", callback_data="set_available")
+        builder.button(text="🔴 غير متاح", callback_data="set_unavailable")
+        builder.button(text="📍 تغيير المنطقة", callback_data="change_location")
+    
+    builder.button(text="⚙️ تعديل البيانات", callback_data="edit_profile")
+    builder.button(text="📊 إحصائياتي", callback_data="my_stats")
+    builder.adjust(2, 1)
+    return builder.as_markup()
+
+def edit_profile_keyboard(role):
+    """أزرار تعديل البيانات"""
+    builder = InlineKeyboardBuilder()
+    
+    builder.button(text="👤 تعديل الاسم", callback_data="edit_name")
+    builder.button(text="📱 تعديل الجوال", callback_data="edit_phone")
+    
+    if role == "captain":
+        builder.button(text="🚘 تعديل السيارة", callback_data="edit_car")
+        builder.button(text="🚪 تعديل المقاعد", callback_data="edit_seats")
+    
+    builder.button(text="🌆 تغيير المدينة", callback_data="edit_city")
+    builder.button(text="🏘️ تغيير الحي", callback_data="edit_neighborhood")
+    builder.button(text="🔙 العودة للقائمة", callback_data="back_to_main")
+    builder.adjust(2)
+    return builder.as_markup()
+
+def destination_keyboard(city):
+    """أزرار اختيار الوجهة للعميل"""
+    try:
+        with open("neighborhoods.json", "r", encoding="utf-8") as f:
+            neighborhoods_data = json.load(f)
+            
+        builder = InlineKeyboardBuilder()
+        builder.button(text="📍 نفس المنطقة", callback_data="dest_same")
+        
+        for neighborhood in neighborhoods_data.get(city, []):
+            builder.button(text=neighborhood, callback_data=f"dest_{neighborhood}")
+        
+        builder.button(text="🔙 رجوع", callback_data="back_to_main")
+        builder.adjust(2)
+        return builder.as_markup()
+        
+    except FileNotFoundError:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="❌ ملف الأحياء غير موجود", callback_data="error_no_file")
+        return builder.as_markup()
+
 # ================== إعداد البوت ==================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -285,17 +395,38 @@ dp = Dispatcher(storage=MemoryStorage())
 
 @dp.message(F.text == "/start")
 async def start_command(message: types.Message, state: FSMContext):
-    """بداية التسجيل"""
+    """بداية التسجيل أو القائمة الرئيسية"""
     await state.clear()
-    welcome_text = """
+    user_id = message.from_user.id
+    
+    # التحقق من تسجيل المستخدم
+    if is_user_registered(user_id):
+        user = get_user_by_id(user_id)
+        role_text = "العميل" if user['role'] == 'client' else "الكابتن"
+        
+        welcome_back = f"""
+🎉 أهلاً وسهلاً {user['full_name']}!
+
+أنت مسجل كـ {role_text} في منطقة:
+📍 {user['city']} - {user['neighborhood']}
+
+اختر العملية المطلوبة:
+        """
+        
+        await message.answer(welcome_back, reply_markup=main_menu_keyboard(user['role']))
+    else:
+        # مستخدم جديد - عرض شاشة التسجيل
+        welcome_text = """
 🌟 مرحباً بك في نظام طقطق للمواصلات 🌟
 
 اختر دورك في النظام:
 🚕 العميل: يطلب توصيلة
 🧑‍✈️ الكابتن: يقدم خدمة التوصيل
-    """
-    await message.answer(welcome_text, reply_markup=start_keyboard())
-    await state.set_state(RegisterStates.role)
+        """
+        await message.answer(welcome_text, reply_markup=start_keyboard())
+        await state.set_state(RegisterStates.role)
+
+# ================== معالجات التسجيل ==================
 
 @dp.callback_query(F.data.startswith("role_"))
 async def handle_role_selection(callback: types.CallbackQuery, state: FSMContext):
@@ -433,351 +564,6 @@ async def handle_neighborhood_selection(callback: types.CallbackQuery, state: FS
         )
 
     await state.clear()
-
-async def search_for_captains(message, city, neighborhood):
-    """البحث عن الكباتن وعرضهم للعميل"""
-    captains = find_available_captains(city, neighborhood)
-    
-    if not captains:
-        await message.answer(
-            "😔 عذراً، لا يوجد كباتن متاحين في منطقتك حالياً.\n\n"
-            "💡 نصائح:\n"
-            "• جرب مرة أخرى بعد قليل\n"
-            "• تأكد من اختيار الحي الصحيح\n"
-            "• يمكنك إعادة المحاولة بإرسال /start"
-        )
-        return
-
-    await message.answer(f"🎉 وُجد {len(captains)} كابتن متاح في منطقتك!")
-    
-    for captain in captains:
-        captain_info = (
-            f"👨‍✈️ الكابتن: {captain['full_name']}\n"
-            f"🚘 السيارة: {captain['car_model']}\n"
-            f"🔢 اللوحة: {captain['car_plate']}\n"
-            f"🚪 المقاعد المتاحة: {captain['seats']}\n"
-            f"📍 المنطقة: {captain['city']} - {captain['neighborhood']}"
-        )
-        
-        await message.answer(
-            captain_info,
-            reply_markup=captain_selection_keyboard(captain["user_id"])
-        )
-
-@dp.callback_query(F.data.startswith("choose_"))
-async def handle_captain_selection(callback: types.CallbackQuery):
-    """معالج اختيار العميل للكابتن"""
-    captain_id = int(callback.data.split("_")[1])
-    client_id = callback.from_user.id
-
-    # إنشاء طلب جديد
-    if not create_match_request(client_id, captain_id):
-        await callback.answer("⚠️ لديك طلب مُعلق مع هذا الكابتن", show_alert=True)
-        return
-
-    # جلب بيانات العميل
-    client = get_user_by_id(client_id)
-    captain = get_user_by_id(captain_id)
-
-    if not client or not captain:
-        await callback.answer("❌ خطأ في البيانات", show_alert=True)
-        return
-
-    # إشعار الكابتن
-    notification_text = (
-        f"🚖 طلب رحلة جديد!\n\n"
-        f"👤 العميل: {client['full_name']}\n"
-        f"📱 الجوال: {client['phone']}\n"
-        f"📍 المنطقة: {client['city']} - {client['neighborhood']}\n\n"
-        f"هل تقبل هذا الطلب؟"
-    )
-
-    await bot.send_message(
-        captain_id,
-        notification_text,
-        reply_markup=captain_response_keyboard(client_id)
-    )
-
-    await callback.message.edit_text("⏳ تم إرسال طلبك للكابتن، يرجى انتظار الرد...")
-
-@dp.callback_query(F.data.startswith("captain_accept_"))
-async def handle_captain_acceptance(callback: types.CallbackQuery):
-    """معالج قبول الكابتن للطلب"""
-    client_id = int(callback.data.split("_")[2])
-    captain_id = callback.from_user.id
-
-    # تحديث حالة الطلب
-    update_match_status(client_id, captain_id, "captain_accepted")
-
-    # جلب بيانات الكابتن
-    captain = get_user_by_id(captain_id)
-
-    await callback.message.edit_text(
-        f"✅ تم قبول الطلب!\n\n"
-        f"ننتظر موافقة العميل النهائية..."
-    )
-
-    # إشعار العميل بقبول الكابتن
-    client_notification = (
-        f"🎉 الكابتن قبل طلبك!\n\n"
-        f"👨‍✈️ الكابتن: {captain['full_name']}\n"
-        f"🚘 السيارة: {captain['car_model']} ({captain['car_plate']})\n"
-        f"🚪 المقاعد: {captain['seats']}\n"
-        f"📱 الجوال: {captain['phone']}\n\n"
-        f"هل توافق على بدء الرحلة؟"
-    )
-
-    await bot.send_message(
-        client_id,
-        client_notification,
-        reply_markup=client_confirmation_keyboard(captain_id)
-    )
-
-@dp.callback_query(F.data.startswith("captain_reject_"))
-async def handle_captain_rejection(callback: types.CallbackQuery):
-    """معالج رفض الكابتن للطلب"""
-    client_id = int(callback.data.split("_")[2])
-    captain_id = callback.from_user.id
-
-    # تحديث حالة الطلب
-    update_match_status(client_id, captain_id, "rejected")
-
-    await callback.message.edit_text("❌ تم رفض الطلب")
-
-    # إشعار العميل بالرفض
-    client = get_user_by_id(client_id)
-    await bot.send_message(
-        client_id,
-        f"😔 عذراً، الكابتن غير متاح حالياً\n\n"
-        f"يمكنك اختيار كابتن آخر أو المحاولة لاحقاً\n"
-        f"إرسال /start للبحث مرة أخرى"
-    )
-
-    # البحث عن كباتن آخرين
-    if client:
-        await search_for_captains(
-            await bot.send_message(client_id, "🔍 البحث عن كباتن آخرين..."),
-            client['city'],
-            client['neighborhood']
-        )
-
-@dp.callback_query(F.data.startswith("client_confirm_"))
-async def handle_client_confirmation(callback: types.CallbackQuery):
-    """معالج موافقة العميل النهائية"""
-    captain_id = int(callback.data.split("_")[2])
-    client_id = callback.from_user.id
-
-    # تحديث حالة الطلب إلى مكتمل
-    update_match_status(client_id, captain_id, "completed", client_confirmed=True)
-
-    # جلب بيانات الكابتن والعميل
-    captain = get_user_by_id(captain_id)
-    client = get_user_by_id(client_id)
-
-    # إشعار العميل
-    success_message = (
-        f"✅ تم تأكيد الرحلة بنجاح!\n\n"
-        f"👨‍✈️ الكابتن: {captain['full_name']}\n"
-        f"📱 جوال الكابتن: {captain['phone']}\n"
-        f"🚘 السيارة: {captain['car_model']} ({captain['car_plate']})\n\n"
-        f"🎯 تواصل مع الكابتن لتحديد نقطة الالتقاء\n"
-        f"🙏 نتمنى لك رحلة سعيدة!"
-    )
-
-    keyboard = contact_captain_keyboard(captain.get('username'))
-    await callback.message.edit_text(success_message, reply_markup=keyboard)
-
-    # إشعار الكابتن
-    captain_notification = (
-        f"🎉 تم تأكيد الرحلة!\n\n"
-        f"👤 العميل: {client['full_name']}\n"
-        f"📱 جوال العميل: {client['phone']}\n"
-        f"📍 المنطقة: {client['city']} - {client['neighborhood']}\n\n"
-        f"📞 تواصل مع العميل لتحديد التفاصيل"
-    )
-
-    client_contact_keyboard = InlineKeyboardBuilder()
-    if client.get('username'):
-        client_contact_keyboard.button(
-            text="💬 تواصل مع العميل",
-            url=f"https://t.me/{client['username']}"
-        )
-
-    await bot.send_message(
-        captain_id,
-        captain_notification,
-        reply_markup=client_contact_keyboard.as_markup()
-    )
-
-@dp.callback_query(F.data.startswith("client_cancel_"))
-async def handle_client_cancellation(callback: types.CallbackQuery):
-    """معالج إلغاء العميل للطلب"""
-    captain_id = int(callback.data.split("_")[2])
-    client_id = callback.from_user.id
-
-    # تحديث حالة الطلب وإعادة الكابتن للتوفر
-    update_match_status(client_id, captain_id, "cancelled")
-    reset_captain_availability(captain_id)
-
-    await callback.message.edit_text(
-        f"❌ تم إلغاء الطلب\n\n"
-        f"يمكنك البحث عن كابتن آخر بإرسال /start"
-    )
-
-    # إشعار الكابتن بالإلغاء
-    await bot.send_message(
-        captain_id,
-        f"ℹ️ تم إلغاء الطلب من قبل العميل\n"
-        f"يمكنك استقبال طلبات أخرى الآن"
-    )
-
-# ================== أزرار المستخدم المسجل ==================
-def main_menu_keyboard(role):
-    """القائمة الرئيسية للمستخدم المسجل"""
-    builder = InlineKeyboardBuilder()
-    
-    if role == "client":
-        builder.button(text="🚕 طلب توصيلة", callback_data="request_ride")
-        builder.button(text="🏘️ تغيير الوجهة", callback_data="change_destination")
-    else:  # captain
-        builder.button(text="🟢 متاح للتوصيل", callback_data="set_available")
-        builder.button(text="🔴 غير متاح", callback_data="set_unavailable")
-        builder.button(text="📍 تغيير المنطقة", callback_data="change_location")
-    
-    builder.button(text="⚙️ تعديل البيانات", callback_data="edit_profile")
-    builder.button(text="📊 إحصائياتي", callback_data="my_stats")
-    builder.adjust(2, 1)
-    return builder.as_markup()
-
-def edit_profile_keyboard(role):
-    """أزرار تعديل البيانات"""
-    builder = InlineKeyboardBuilder()
-    
-    builder.button(text="👤 تعديل الاسم", callback_data="edit_name")
-    builder.button(text="📱 تعديل الجوال", callback_data="edit_phone")
-    
-    if role == "captain":
-        builder.button(text="🚘 تعديل السيارة", callback_data="edit_car")
-        builder.button(text="🚪 تعديل المقاعد", callback_data="edit_seats")
-    
-    builder.button(text="🌆 تغيير المدينة", callback_data="edit_city")
-    builder.button(text="🏘️ تغيير الحي", callback_data="edit_neighborhood")
-    builder.button(text="🔙 العودة للقائمة", callback_data="back_to_main")
-    builder.adjust(2)
-    return builder.as_markup()
-
-def destination_keyboard(city):
-    """أزرار اختيار الوجهة للعميل"""
-    try:
-        with open("neighborhoods.json", "r", encoding="utf-8") as f:
-            neighborhoods_data = json.load(f)
-            
-        builder = InlineKeyboardBuilder()
-        builder.button(text="📍 نفس المنطقة", callback_data="dest_same")
-        
-        for neighborhood in neighborhoods_data.get(city, []):
-            builder.button(text=neighborhood, callback_data=f"dest_{neighborhood}")
-        
-        builder.button(text="🔙 رجوع", callback_data="back_to_main")
-        builder.adjust(2)
-        return builder.as_markup()
-        
-    except FileNotFoundError:
-        builder = InlineKeyboardBuilder()
-        builder.button(text="❌ ملف الأحياء غير موجود", callback_data="error_no_file")
-        return builder.as_markup()
-
-# ================== حالات التعديل ==================
-class EditStates(StatesGroup):
-    edit_name = State()
-    edit_phone = State()
-    edit_car_model = State()
-    edit_car_plate = State()
-    edit_seats = State()
-    change_city = State()
-    change_neighborhood = State()
-    select_destination = State()
-
-# ================== دوال مساعدة ==================
-def is_user_registered(user_id):
-    """التحقق من تسجيل المستخدم"""
-    user = get_user_by_id(user_id)
-    return user is not None
-
-def update_user_field(user_id, field, value):
-    """تحديث حقل واحد في بيانات المستخدم"""
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(f"UPDATE users SET {field}=%s WHERE user_id=%s", (value, user_id))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def get_user_stats(user_id):
-    """جلب إحصائيات المستخدم"""
-    conn = get_conn()
-    cur = conn.cursor()
-    
-    user = get_user_by_id(user_id)
-    if not user:
-        return None
-    
-    if user['role'] == 'client':
-        cur.execute("""
-            SELECT 
-                COUNT(*) as total_requests,
-                COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_trips,
-                COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_requests
-            FROM matches WHERE client_id = %s
-        """, (user_id,))
-    else:
-        cur.execute("""
-            SELECT 
-                COUNT(*) as total_requests,
-                COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_trips,
-                COUNT(CASE WHEN status = 'captain_accepted' THEN 1 END) as accepted_requests
-            FROM matches WHERE captain_id = %s
-        """, (user_id,))
-    
-    stats = cur.fetchone()
-    cur.close()
-    conn.close()
-    return stats
-
-# ================== معالجات المستخدم المسجل ==================
-
-@dp.message(F.text == "/start")
-async def start_command(message: types.Message, state: FSMContext):
-    """بداية التسجيل أو القائمة الرئيسية"""
-    await state.clear()
-    user_id = message.from_user.id
-    
-    # التحقق من تسجيل المستخدم
-    if is_user_registered(user_id):
-        user = get_user_by_id(user_id)
-        role_text = "العميل" if user['role'] == 'client' else "الكابتن"
-        
-        welcome_back = f"""
-🎉 أهلاً وسهلاً {user['full_name']}!
-
-أنت مسجل كـ {role_text} في منطقة:
-📍 {user['city']} - {user['neighborhood']}
-
-اختر العملية المطلوبة:
-        """
-        
-        await message.answer(welcome_back, reply_markup=main_menu_keyboard(user['role']))
-    else:
-        # مستخدم جديد - عرض شاشة التسجيل
-        welcome_text = """
-🌟 مرحباً بك في نظام طقطق للمواصلات 🌟
-
-اختر دورك في النظام:
-🚕 العميل: يطلب توصيلة
-🧑‍✈️ الكابتن: يقدم خدمة التوصيل
-        """
-        await message.answer(welcome_text, reply_markup=start_keyboard())
-        await state.set_state(RegisterStates.role)
 
 # ================== معالجات القائمة الرئيسية ==================
 
@@ -1061,7 +847,7 @@ async def edit_city_handler(callback: types.CallbackQuery, state: FSMContext):
     )
     await state.set_state(EditStates.change_city)
 
-# معالجات تغيير المدينة والحي (مشتركة مع الكابتن)
+# معالجات تغيير المدينة والحي (مشتركة)
 @dp.callback_query(F.data.startswith("city_"), EditStates.change_city)
 async def handle_city_change(callback: types.CallbackQuery, state: FSMContext):
     """معالج تغيير المدينة"""
@@ -1107,7 +893,211 @@ async def handle_neighborhood_change(callback: types.CallbackQuery, state: FSMCo
     )
     await state.clear()
 
+# ================== معالجات البحث والطلبات ==================
+
+async def search_for_captains(message, city, neighborhood):
+    """البحث عن الكباتن وعرضهم للعميل"""
+    captains = find_available_captains(city, neighborhood)
+    
+    if not captains:
+        await message.answer(
+            "😔 عذراً، لا يوجد كباتن متاحين في منطقتك حالياً.\n\n"
+            "💡 نصائح:\n"
+            "• جرب مرة أخرى بعد قليل\n"
+            "• تأكد من اختيار الحي الصحيح\n"
+            "• يمكنك إعادة المحاولة بإرسال /start"
+        )
+        return
+
+    await message.answer(f"🎉 وُجد {len(captains)} كابتن متاح في منطقتك!")
+    
+    for captain in captains:
+        captain_info = (
+            f"👨‍✈️ الكابتن: {captain['full_name']}\n"
+            f"🚘 السيارة: {captain['car_model']}\n"
+            f"🔢 اللوحة: {captain['car_plate']}\n"
+            f"🚪 المقاعد المتاحة: {captain['seats']}\n"
+            f"📍 المنطقة: {captain['city']} - {captain['neighborhood']}"
+        )
+        
+        await message.answer(
+            captain_info,
+            reply_markup=captain_selection_keyboard(captain["user_id"])
+        )
+
+@dp.callback_query(F.data.startswith("choose_"))
+async def handle_captain_selection(callback: types.CallbackQuery):
+    """معالج اختيار العميل للكابتن"""
+    captain_id = int(callback.data.split("_")[1])
+    client_id = callback.from_user.id
+
+    # إنشاء طلب جديد
+    if not create_match_request(client_id, captain_id):
+        await callback.answer("⚠️ لديك طلب مُعلق مع هذا الكابتن", show_alert=True)
+        return
+
+    # جلب بيانات العميل
+    client = get_user_by_id(client_id)
+    captain = get_user_by_id(captain_id)
+
+    if not client or not captain:
+        await callback.answer("❌ خطأ في البيانات", show_alert=True)
+        return
+
+    # إشعار الكابتن
+    notification_text = (
+        f"🚖 طلب رحلة جديد!\n\n"
+        f"👤 العميل: {client['full_name']}\n"
+        f"📱 الجوال: {client['phone']}\n"
+        f"📍 المنطقة: {client['city']} - {client['neighborhood']}\n\n"
+        f"هل تقبل هذا الطلب؟"
+    )
+
+    await bot.send_message(
+        captain_id,
+        notification_text,
+        reply_markup=captain_response_keyboard(client_id)
+    )
+
+    await callback.message.edit_text("⏳ تم إرسال طلبك للكابتن، يرجى انتظار الرد...")
+
+@dp.callback_query(F.data.startswith("captain_accept_"))
+async def handle_captain_acceptance(callback: types.CallbackQuery):
+    """معالج قبول الكابتن للطلب"""
+    client_id = int(callback.data.split("_")[2])
+    captain_id = callback.from_user.id
+
+    # تحديث حالة الطلب
+    update_match_status(client_id, captain_id, "captain_accepted")
+
+    # جلب بيانات الكابتن
+    captain = get_user_by_id(captain_id)
+
+    await callback.message.edit_text(
+        f"✅ تم قبول الطلب!\n\n"
+        f"ننتظر موافقة العميل النهائية..."
+    )
+
+    # إشعار العميل بقبول الكابتن
+    client_notification = (
+        f"🎉 الكابتن قبل طلبك!\n\n"
+        f"👨‍✈️ الكابتن: {captain['full_name']}\n"
+        f"🚘 السيارة: {captain['car_model']} ({captain['car_plate']})\n"
+        f"🚪 المقاعد: {captain['seats']}\n"
+        f"📱 الجوال: {captain['phone']}\n\n"
+        f"هل توافق على بدء الرحلة؟"
+    )
+
+    await bot.send_message(
+        client_id,
+        client_notification,
+        reply_markup=client_confirmation_keyboard(captain_id)
+    )
+
+@dp.callback_query(F.data.startswith("captain_reject_"))
+async def handle_captain_rejection(callback: types.CallbackQuery):
+    """معالج رفض الكابتن للطلب"""
+    client_id = int(callback.data.split("_")[2])
+    captain_id = callback.from_user.id
+
+    # تحديث حالة الطلب
+    update_match_status(client_id, captain_id, "rejected")
+
+    await callback.message.edit_text("❌ تم رفض الطلب")
+
+    # إشعار العميل بالرفض
+    client = get_user_by_id(client_id)
+    await bot.send_message(
+        client_id,
+        f"😔 عذراً، الكابتن غير متاح حالياً\n\n"
+        f"يمكنك اختيار كابتن آخر أو المحاولة لاحقاً\n"
+        f"إرسال /start للبحث مرة أخرى"
+    )
+
+    # البحث عن كباتن آخرين
+    if client:
+        await search_for_captains(
+            await bot.send_message(client_id, "🔍 البحث عن كباتن آخرين..."),
+            client['city'],
+            client['neighborhood']
+        )
+
+@dp.callback_query(F.data.startswith("client_confirm_"))
+async def handle_client_confirmation(callback: types.CallbackQuery):
+    """معالج موافقة العميل النهائية"""
+    captain_id = int(callback.data.split("_")[2])
+    client_id = callback.from_user.id
+
+    # تحديث حالة الطلب إلى مكتمل
+    update_match_status(client_id, captain_id, "completed", client_confirmed=True)
+
+    # جلب بيانات الكابتن والعميل
+    captain = get_user_by_id(captain_id)
+    client = get_user_by_id(client_id)
+
+    # إشعار العميل
+    success_message = (
+        f"✅ تم تأكيد الرحلة بنجاح!\n\n"
+        f"👨‍✈️ الكابتن: {captain['full_name']}\n"
+        f"📱 جوال الكابتن: {captain['phone']}\n"
+        f"🚘 السيارة: {captain['car_model']} ({captain['car_plate']})\n\n"
+        f"🎯 تواصل مع الكابتن لتحديد نقطة الالتقاء\n"
+        f"🙏 نتمنى لك رحلة سعيدة!"
+    )
+
+    keyboard = contact_captain_keyboard(captain.get('username'))
+    await callback.message.edit_text(success_message, reply_markup=keyboard)
+
+    # إشعار الكابتن
+    captain_notification = (
+        f"🎉 تم تأكيد الرحلة!\n\n"
+        f"👤 العميل: {client['full_name']}\n"
+        f"📱 جوال العميل: {client['phone']}\n"
+        f"📍 المنطقة: {client['city']} - {client['neighborhood']}\n\n"
+        f"📞 تواصل مع العميل لتحديد التفاصيل"
+    )
+
+    client_contact_keyboard = InlineKeyboardBuilder()
+    if client.get('username'):
+        client_contact_keyboard.button(
+            text="💬 تواصل مع العميل",
+            url=f"https://t.me/{client['username']}"
+        )
+
+    await bot.send_message(
+        captain_id,
+        captain_notification,
+        reply_markup=client_contact_keyboard.as_markup()
+    )
+
+@dp.callback_query(F.data.startswith("client_cancel_"))
+async def handle_client_cancellation(callback: types.CallbackQuery):
+    """معالج إلغاء العميل للطلب"""
+    captain_id = int(callback.data.split("_")[2])
+    client_id = callback.from_user.id
+
+    # تحديث حالة الطلب وإعادة الكابتن للتوفر
+    update_match_status(client_id, captain_id, "cancelled")
+    reset_captain_availability(captain_id)
+
+    await callback.message.edit_text(
+        f"❌ تم إلغاء الطلب\n\n"
+        f"يمكنك البحث عن كابتن آخر بإرسال /start"
+    )
+
+    # إشعار الكابتن بالإلغاء
+    await bot.send_message(
+        captain_id,
+        f"ℹ️ تم إلغاء الطلب من قبل العميل\n"
+        f"يمكنك استقبال طلبات أخرى الآن"
+    )
+
 # ================== تشغيل البوت ==================
 if __name__ == "__main__":
-    init_db()
-    asyncio.run(dp.start_polling(bot))
+    print("🚀 بدء تشغيل بوت طقطق...")
+    try:
+        init_db()
+        print("✅ تم الاتصال بقاعدة البيانات")
+        asyncio.run(dp.start_polling(bot))
+    except Exception as e:
+        print(f"❌ خطأ في التشغيل: {e}")
