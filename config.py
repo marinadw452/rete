@@ -1,11 +1,18 @@
-import os
-from dotenv import load_dotenv
-load_dotenv()
+"""
+ملف إعدادات نظام طقطق
+"""
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# ==================== إعدادات تليجرام ====================
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 
-PG_DB = os.getenv("PGDATABASE")
-PG_USER = os.getenv("PGUSER")
-PG_PASSWORD = os.getenv("PGPASSWORD")
-PG_HOST = os.getenv("PGHOST")
-PG_PORT = int(os.getenv("PGPORT", 5432))
+# ==================== إعدادات قاعدة البيانات ====================
+PG_HOST = "localhost"
+PG_PORT = "5432"
+PG_DB = "taktak_db"
+PG_USER = "postgres"
+PG_PASSWORD = "your_password"
+
+# ==================== إعدادات النظام ====================
+SUPPORTED_CITIES = ['الرياض', 'جدة']
+MAX_SEATS = 8
+MIN_SEATS = 1
