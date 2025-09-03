@@ -538,7 +538,7 @@ async def handle_city_selection(callback: types.CallbackQuery, state: FSMContext
     )
     await state.set_state(RegisterStates.neighborhood)
 
-@dp.callback_query(F.data.startswith("neigh_"))
+@dp.callback_query(F.data.startswith("neigh_"), RegisterStates.neighborhood)
 async def handle_neighborhood_selection(callback: types.CallbackQuery, state: FSMContext):
     """معالج اختيار الحي وإنهاء التسجيل"""
     neighborhood = callback.data.replace("neigh_", "")
