@@ -1,4 +1,3 @@
-
 -- إنشاء امتداد للوقت
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
