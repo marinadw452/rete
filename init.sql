@@ -1,11 +1,10 @@
 -- ==========================================
--- قاعدة بيانات نظام طقطق - مبسطة
+-- قاعدة بيانات نظام طقطق - جاهزة
 -- ==========================================
 
 -- جدول المستخدمين
 CREATE TABLE IF NOT EXISTS users (
     user_id BIGINT PRIMARY KEY,
-    username TEXT DEFAULT '',        -- إضافة العمود username مع قيمة افتراضية
     role VARCHAR(10) NOT NULL CHECK (role IN ('client', 'captain')),
     subscription VARCHAR(20),
     full_name TEXT NOT NULL,
@@ -15,11 +14,14 @@ CREATE TABLE IF NOT EXISTS users (
     agreement BOOLEAN DEFAULT FALSE,
     city TEXT NOT NULL,
     neighborhood TEXT NOT NULL,
-    neighborhood2 TEXT DEFAULT '',   -- تعيين قيمة افتراضية فارغة
-    neighborhood3 TEXT DEFAULT '',   -- تعيين قيمة افتراضية فارغة
     is_available BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- تعديل الأعمدة بعد إنشاء الجدول
+ALTER TABLE users ADD COLUMN username TEXT;
+ALTER TABLE users ADD COLUMN neighborhood2 TEXT DEFAULT '';
+ALTER TABLE users ADD COLUMN neighborhood3 TEXT DEFAULT '';
 
 -- جدول الطلبات
 CREATE TABLE IF NOT EXISTS matches (
@@ -64,7 +66,3 @@ $$ language 'plpgsql';
 -- تطبيق الدالة على جدول matches
 CREATE TRIGGER update_matches_updated_at BEFORE UPDATE ON matches
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
--- إضافة عمود username إذا لم يكن موجود
-ALTER TABLE users
-ADD COLUMN IF NOT EXISTS username TEXT DEFAULT '';
-
