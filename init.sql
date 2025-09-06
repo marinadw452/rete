@@ -67,3 +67,5 @@ CREATE TRIGGER update_matches_updated_at BEFORE UPDATE ON matches
 ALTER TABLE users RENAME COLUMN available TO is_available;
 ALTER TABLE users ALTER COLUMN neighborhood2 SET DEFAULT '';
 ALTER TABLE users ALTER COLUMN neighborhood3 SET DEFAULT '';
+ALTER TABLE users ADD COLUMN username TEXT;
+
