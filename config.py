@@ -1,20 +1,16 @@
-"""
-ملف إعدادات نظام طقطق
-"""
-
 import os
 
 # ==================== إعدادات تليجرام ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
 
 # ==================== إعدادات قاعدة البيانات ====================
-PG_HOST = os.getenv("PGHOST")
-PG_PORT = os.getenv("PGPORT")
-PG_DB = os.getenv("PGDATABASE")
-PG_USER = os.getenv("PGUSER")
-PG_PASSWORD = os.getenv("PGPASSWORD")
+PG_HOST = os.getenv('PG_HOST', 'localhost')
+PG_PORT = os.getenv('PG_PORT', '5432')
+PG_DB = os.getenv('PG_DB', 'taktak_db')
+PG_USER = os.getenv('PG_USER', 'postgres')
+PG_PASSWORD = os.getenv('PG_PASSWORD', 'your_password')
 
 # ==================== إعدادات النظام ====================
 SUPPORTED_CITIES = ['الرياض', 'جدة']
-MAX_SEATS = 8
-MIN_SEATS = 1
+MAX_RATING = 5
+MIN_RATING = 1
