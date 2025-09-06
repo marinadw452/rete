@@ -1,14 +1,13 @@
 import os
 
-# ==================== إعدادات تليجرام ====================
-BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # ==================== إعدادات قاعدة البيانات ====================
-PG_HOST = os.getenv('PG_HOST', 'localhost')
-PG_PORT = os.getenv('PG_PORT', '5432')
-PG_DB = os.getenv('PG_DB', 'taktak_db')
-PG_USER = os.getenv('PG_USER', 'postgres')
-PG_PASSWORD = os.getenv('PG_PASSWORD', 'your_password')
+PG_HOST = os.getenv("PGHOST")
+PG_PORT = os.getenv("PGPORT")
+PG_DB = os.getenv("PGDATABASE")
+PG_USER = os.getenv("PGUSER")
+PG_PASSWORD = os.getenv("PGPASSWORD")
 
 # ==================== إعدادات النظام ====================
 SUPPORTED_CITIES = ['الرياض', 'جدة']
