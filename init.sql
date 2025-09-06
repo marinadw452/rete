@@ -65,3 +65,5 @@ $$ language 'plpgsql';
 CREATE TRIGGER update_matches_updated_at BEFORE UPDATE ON matches
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 ALTER TABLE users RENAME COLUMN available TO is_available;
+ALTER TABLE users ALTER COLUMN neighborhood2 SET DEFAULT '';
+ALTER TABLE users ALTER COLUMN neighborhood3 SET DEFAULT '';
