@@ -64,3 +64,7 @@ $$ language 'plpgsql';
 -- تطبيق الدالة على جدول matches
 CREATE TRIGGER update_matches_updated_at BEFORE UPDATE ON matches
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- إضافة عمود username إذا لم يكن موجود
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS username TEXT DEFAULT '';
+
