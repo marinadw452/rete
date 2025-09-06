@@ -1,10 +1,16 @@
 -- ==========================================
--- قاعدة بيانات نظام طقطق - جاهزة
+-- قاعدة بيانات نظام طقطق - نسخة نظيفة
 -- ==========================================
 
--- جدول المستخدمين
-CREATE TABLE IF NOT EXISTS users (
+-- حذف الجداول إذا كانت موجودة
+DROP TABLE IF EXISTS ratings CASCADE;
+DROP TABLE IF EXISTS matches CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
+
+-- ================= جدول المستخدمين =================
+CREATE TABLE users (
     user_id BIGINT PRIMARY KEY,
+    username TEXT,
     role VARCHAR(10) NOT NULL CHECK (role IN ('client', 'captain')),
     subscription VARCHAR(20),
     full_name TEXT NOT NULL,
@@ -14,17 +20,17 @@ CREATE TABLE IF NOT EXISTS users (
     agreement BOOLEAN DEFAULT FALSE,
     city TEXT NOT NULL,
     neighborhood TEXT NOT NULL,
+    neighborhood2 TEXT DEFAULT '',
+    neighborhood3 TEXT DEFAULT '',
     is_available BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- تعديل الأعمدة بعد إنشاء الجدول
-ALTER TABLE users ADD COLUMN username TEXT;
-ALTER TABLE users ADD COLUMN neighborhood2 TEXT DEFAULT '';
-ALTER TABLE users ADD COLUMN neighborhood3 TEXT DEFAULT '';
+-- فهارس الأداء للمستخدمين
+CREATE INDEX idx_available_captains ON users (role, is_available, city);
 
--- جدول الطلبات
-CREATE TABLE IF NOT EXISTS matches (
+-- ================= جدول الطلبات =================
+CREATE TABLE matches (
     id SERIAL PRIMARY KEY,
     client_id BIGINT REFERENCES users(user_id),
     captain_id BIGINT REFERENCES users(user_id),
@@ -37,8 +43,24 @@ CREATE TABLE IF NOT EXISTS matches (
     CONSTRAINT unique_pending_match UNIQUE (client_id, captain_id)
 );
 
--- جدول التقييمات
-CREATE TABLE IF NOT EXISTS ratings (
+-- فهارس الأداء للطلبات
+CREATE INDEX idx_active_matches ON matches (status, created_at);
+
+-- دالة لتحديث updated_at تلقائيًا
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- تطبيق الدالة على جدول الطلبات
+CREATE TRIGGER update_matches_updated_at BEFORE UPDATE ON matches
+FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ================= جدول التقييمات =================
+CREATE TABLE ratings (
     id SERIAL PRIMARY KEY,
     match_id INTEGER REFERENCES matches(id),
     client_id BIGINT REFERENCES users(user_id),
@@ -49,20 +71,5 @@ CREATE TABLE IF NOT EXISTS ratings (
     CONSTRAINT unique_rating UNIQUE (match_id, client_id)
 );
 
--- فهارس أساسية للأداء
-CREATE INDEX IF NOT EXISTS idx_available_captains ON users (role, is_available, city);
-CREATE INDEX IF NOT EXISTS idx_active_matches ON matches (status, created_at);
-CREATE INDEX IF NOT EXISTS idx_ratings_captain ON ratings (captain_id, rating);
-
--- دالة تحديث updated_at
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
-
--- تطبيق الدالة على جدول matches
-CREATE TRIGGER update_matches_updated_at BEFORE UPDATE ON matches
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- فهارس الأداء للتقييمات
+CREATE INDEX idx_ratings_captain ON ratings (captain_id, rating);
