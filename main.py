@@ -643,14 +643,17 @@ async def handle_destination_input(message: types.Message, state: FSMContext):
     destination = message.text
     user = get_user_by_id(message.from_user.id)
     
+    # حفظ الوجهة في الحالة
+    await state.update_data(destination=destination)
+    
     await message.answer(
         f"🎯 الوجهة: {destination}\n\n"
         f"🔍 جاري البحث عن الكباتن المتاحين في منطقتك..."
     )
     
-    await state.update_data(destination=destination)
     await search_for_captains(message, user['city'], user['neighborhood'], destination)
-    await state.clear()
+    # لا تمسح الحالة هنا
+    # await state.clear()  <-- احذف هذا السطر
 
 async def search_for_captains(message, city, neighborhood, destination):
     """البحث عن الكباتن وعرضهم للعميل"""
