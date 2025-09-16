@@ -13,3 +13,11 @@ PG_PASSWORD = os.getenv("PGPASSWORD")
 SUPPORTED_CITIES = ['الرياض', 'جدة']
 MAX_RATING = 5
 MIN_RATING = 1
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
