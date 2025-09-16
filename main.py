@@ -643,17 +643,14 @@ async def handle_destination_input(message: types.Message, state: FSMContext):
     destination = message.text
     user = get_user_by_id(message.from_user.id)
     
-    # حفظ الوجهة في الحالة
-    await state.update_data(destination=destination)
-    
     await message.answer(
         f"🎯 الوجهة: {destination}\n\n"
         f"🔍 جاري البحث عن الكباتن المتاحين في منطقتك..."
     )
     
+    await state.update_data(destination=destination)
     await search_for_captains(message, user['city'], user['neighborhood'], destination)
-    # لا تمسح الحالة هنا
-    # await state.clear()  <-- احذف هذا السطر
+    await state.clear()
 
 async def search_for_captains(message, city, neighborhood, destination):
     """البحث عن الكباتن وعرضهم للعميل"""
@@ -810,46 +807,48 @@ async def handle_trip_completion(callback: types.CallbackQuery):
         "شكراً لك، يمكنك الآن استقبال طلبات جديدة"
     )
 
-    # جلب تفاصيل الطلب لحفظ معرف الطلب للتقييم
-    match = get_match_details(client_id, captain_id)
-    
     # إشعار العميل بانتهاء الرحلة وطلب التقييم
-    rating_keyboard = rating_keyboard()
-    
-    # إرسال رسالة التقييم مع حفظ البيانات في inline keyboard
-    builder = InlineKeyboardBuilder()
-    for i in range(1, 6):
-        builder.button(
-            text=f"{'⭐' * i}", 
-            callback_data=f"rate_{i}_{match['id']}_{captain_id}"
-        )
-    builder.adjust(1)
-
     await bot.send_message(
         client_id,
         "🏁 الحمد لله على سلامتك!\n\n"
         "وصلت بخير إلى وجهتك\n"
         "نود رأيك في الكابتن، كيف تقيم الخدمة؟",
-        reply_markup=builder.as_markup()
+        reply_markup=rating_keyboard()
+    )
+
+    # حفظ معرفات الرحلة للتقييم
+    match = get_match_details(client_id, captain_id)
+    await bot.send_message(
+        client_id, 
+        f"rating_data:{match['id']}_{captain_id}",
+        parse_mode=None
     )
 
 @dp.callback_query(F.data.startswith("rate_"))
 async def handle_rating_selection(callback: types.CallbackQuery, state: FSMContext):
     """معالج اختيار التقييم بالنجوم"""
-    parts = callback.data.split("_")
-    rating = int(parts[1])
-    match_id = int(parts[2]) if len(parts) > 2 else None
-    captain_id = int(parts[3]) if len(parts) > 3 else None
+    rating = int(callback.data.split("_")[1])
     
-    if not match_id or not captain_id:
+    # البحث عن رسالة بيانات التقييم
+    chat_id = callback.message.chat.id
+    messages = await bot.get_chat_history(chat_id, limit=10)
+    
+    rating_data = None
+    for msg in messages:
+        if msg.text and msg.text.startswith("rating_data:"):
+            rating_data = msg.text.replace("rating_data:", "")
+            await bot.delete_message(chat_id, msg.message_id)
+            break
+    
+    if not rating_data:
         await callback.answer("❌ خطأ في بيانات التقييم", show_alert=True)
         return
     
-    # حفظ بيانات التقييم في الحالة
+    match_id, captain_id = rating_data.split("_")
     await state.update_data(
         rating=rating,
-        match_id=match_id,
-        captain_id=captain_id
+        match_id=int(match_id),
+        captain_id=int(captain_id)
     )
     
     await callback.message.edit_text(
@@ -863,13 +862,6 @@ async def handle_rating_comment(message: types.Message, state: FSMContext):
     """معالج تعليق التقييم"""
     comment = message.text
     data = await state.get_data()
-    
-    # نحتاج معرفات الطلب والكابتن من مكان آخر
-    # يجب حفظها عند إنهاء الرحلة
-    if 'match_id' not in data or 'captain_id' not in data:
-        await message.answer("❌ خطأ في بيانات التقييم")
-        await state.clear()
-        return
     
     # حفظ التقييم
     save_rating(
@@ -1134,28 +1126,11 @@ async def handle_role_change(callback: types.CallbackQuery):
     )
 
 # ================== تشغيل البوت ==================
-import signal
-import sys
-
-def signal_handler(sig, frame):
-    print('تم استلام إشارة الإيقاف، جاري إغلاق البوت...')
-    sys.exit(0)
-
 if __name__ == "__main__":
     print("🚀 بدء تشغيل بوت طقطق...")
-    
-    # معالج إشارات النظام
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
     try:
         init_db()
         print("✅ تم الاتصال بقاعدة البيانات")
-        print("🤖 البوت يعمل الآن...")
-        asyncio.run(dp.start_polling(bot, skip_updates=True))
-    except KeyboardInterrupt:
-        print("⏹️ تم إيقاف البوت يدوياً")
+        asyncio.run(dp.start_polling(bot))
     except Exception as e:
         print(f"❌ خطأ في التشغيل: {e}")
-        import traceback
-        traceback.print_exc()
