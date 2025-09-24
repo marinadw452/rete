@@ -1,18 +1,24 @@
-# استخدام Python 3.11 كقاعدة
+دة
 FROM python:3.11-slim
 
 # تحديد مجلد العمل
 WORKDIR /app
 
-FROM python:3.11-slim
+# تثبيت المتطلبات الأساسية
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-
+# نسخ ملف المتطلبات وتثبيتها
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# نسخ جميع ملفات البوت
 COPY . .
 
+# تحديد متغيرات البيئة
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "main.py"]
+# تشغيل البوت المحسن
+CMD ["python", "improved_bot.py"]
