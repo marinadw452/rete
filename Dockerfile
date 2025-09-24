@@ -21,4 +21,4 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 
 # تشغيل البوت المحسن
-CMD ["python", "improved_bot.py"]
+CMD ["python", "main.py"]
