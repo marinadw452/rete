@@ -1,193 +1,112 @@
-سن
--- قم بتشغيل هذا السكريپت في قاعدة البيانات الموجودة
+DROP TABLE IF EXISTS ratings CASCADE;
+DROP TABLE IF EXISTS matches CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
 
--- إضافة الأعمدة الجديدة المطلوبة للجدول الموجود
--- إضافة حقول التقييم لجدول المستخدمين
-ALTER TABLE users ADD COLUMN IF NOT EXISTS avg_rating DECIMAL(3,2) DEFAULT 0.00;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS total_ratings INTEGER DEFAULT 0;
+-- حذف الدوال الموجودة
+DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;
 
--- إضافة قيود للتأكد من صحة البيانات
-ALTER TABLE users ADD CONSTRAINT IF NOT EXISTS check_avg_rating 
-    CHECK (avg_rating >= 0 AND avg_rating <= 5);
-ALTER TABLE users ADD CONSTRAINT IF NOT EXISTS check_total_ratings 
-    CHECK (total_ratings >= 0);
-
--- إنشاء جدول تنظيف الرسائل الجديد
-CREATE TABLE IF NOT EXISTS message_cleanup (
-    id SERIAL PRIMARY KEY,
-    chat_id BIGINT NOT NULL,
-    message_id INTEGER NOT NULL,
-    message_type VARCHAR(50) DEFAULT 'general',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    should_delete BOOLEAN DEFAULT TRUE,
-    CONSTRAINT unique_message UNIQUE (chat_id, message_id)
+-- إنشاء جدول المستخدمين
+CREATE TABLE users (
+    user_id BIGINT PRIMARY KEY,
+    username TEXT,
+    role VARCHAR(10) NOT NULL CHECK (role IN ('client', 'captain')),
+    subscription VARCHAR(20),
+    full_name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    car_model TEXT,
+    car_plate TEXT,
+    agreement BOOLEAN DEFAULT FALSE,
+    city TEXT NOT NULL,
+    neighborhood TEXT NOT NULL,
+    neighborhood2 TEXT,
+    neighborhood3 TEXT,
+    is_available BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- إضافة حقل الملاحظات إلى جدول التقييمات الموجود
-ALTER TABLE ratings ADD COLUMN IF NOT EXISTS comment TEXT;
+-- إنشاء جدول المطابقات
+CREATE TABLE matches (
+    id SERIAL PRIMARY KEY,
+    client_id BIGINT REFERENCES users(user_id),
+    captain_id BIGINT REFERENCES users(user_id),
+    destination TEXT NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending' CHECK (
+        status IN ('pending', 'in_progress', 'rejected', 'cancelled', 'completed')
+    ),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_pending_match UNIQUE (client_id, captain_id)
+);
 
--- تحديث القيود والفهارس
-ALTER TABLE ratings DROP CONSTRAINT IF EXISTS unique_rating;
-ALTER TABLE ratings DROP CONSTRAINT IF EXISTS unique_rating_per_match;
-ALTER TABLE ratings ADD CONSTRAINT unique_rating_per_match UNIQUE (match_id);
+-- إنشاء جدول التقييمات مع حقل الملاحظات الجديد
+CREATE TABLE ratings (
+    id SERIAL PRIMARY KEY,
+    match_id INTEGER REFERENCES matches(id),
+    client_id BIGINT REFERENCES users(user_id),
+    captain_id BIGINT REFERENCES users(user_id),
+    rating INTEGER CHECK (rating >= 1 AND rating <= 5),
+    comment TEXT,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_rating UNIQUE (match_id, client_id)
+);
 
--- إنشاء الفهارس المطلوبة لتحسين الأداء
-CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
-CREATE INDEX IF NOT EXISTS idx_users_city ON users(city);
-CREATE INDEX IF NOT EXISTS idx_users_available ON users(is_available);
-CREATE INDEX IF NOT EXISTS idx_users_rating ON users(avg_rating DESC);
-CREATE INDEX IF NOT EXISTS idx_users_neighborhood ON users(city, neighborhood, neighborhood2, neighborhood3);
+-- إنشاء الفهارس لتحسين الأداء
+CREATE INDEX idx_available_captains ON users (role, is_available, city);
+CREATE INDEX idx_neighborhood_search ON users (neighborhood, neighborhood2, neighborhood3);
+CREATE INDEX idx_active_matches ON matches (status, created_at);
+CREATE INDEX idx_client_matches ON matches (client_id, status);
+CREATE INDEX idx_captain_matches ON matches (captain_id, status);
+CREATE INDEX idx_ratings_captain ON ratings (captain_id, rating);
+CREATE INDEX idx_ratings_match ON ratings (match_id);
 
-CREATE INDEX IF NOT EXISTS idx_matches_client ON matches(client_id);
-CREATE INDEX IF NOT EXISTS idx_matches_captain ON matches(captain_id);
-CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
-CREATE INDEX IF NOT EXISTS idx_matches_created ON matches(created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_ratings_captain ON ratings(captain_id);
-CREATE INDEX IF NOT EXISTS idx_ratings_client ON ratings(client_id);
-CREATE INDEX IF NOT EXISTS idx_ratings_match ON ratings(match_id);
-CREATE INDEX IF NOT EXISTS idx_ratings_created ON ratings(created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_message_cleanup_chat ON message_cleanup(chat_id);
-CREATE INDEX IF NOT EXISTS idx_message_cleanup_created ON message_cleanup(created_at);
-CREATE INDEX IF NOT EXISTS idx_message_cleanup_should_delete ON message_cleanup(should_delete);
-
--- دالة لتحديث متوسط التقييم تلقائياً
-CREATE OR REPLACE FUNCTION update_captain_rating()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- تحديث متوسط التقييم وعدد التقييمات للكابتن
-    UPDATE users 
-    SET 
-        avg_rating = (
-            SELECT COALESCE(AVG(rating)::DECIMAL(3,2), 0) 
-            FROM ratings 
-            WHERE captain_id = COALESCE(NEW.captain_id, OLD.captain_id)
-        ),
-        total_ratings = (
-            SELECT COUNT(*) 
-            FROM ratings 
-            WHERE captain_id = COALESCE(NEW.captain_id, OLD.captain_id)
-        )
-    WHERE user_id = COALESCE(NEW.captain_id, OLD.captain_id);
-    
-    RETURN COALESCE(NEW, OLD);
-END;
-$$ LANGUAGE plpgsql;
-
--- حذف المحفز القديم إذا كان موجوداً وإنشاء الجديد
-DROP TRIGGER IF EXISTS trigger_update_captain_rating ON ratings;
-CREATE TRIGGER trigger_update_captain_rating
-    AFTER INSERT OR UPDATE OR DELETE ON ratings
-    FOR EACH ROW
-    EXECUTE FUNCTION update_captain_rating();
-
--- دالة لتحديث وقت التحديث تلقائياً
-CREATE OR REPLACE FUNCTION update_modified_column()
+-- إنشاء دالة تحديث updated_at
+CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ language 'plpgsql';
 
--- ربط دالة التحديث بجدول المطابقات
-DROP TRIGGER IF EXISTS trigger_update_matches_modified ON matches;
-CREATE TRIGGER trigger_update_matches_modified
+-- إنشاء المحفز لتحديث updated_at تلقائياً
+CREATE TRIGGER update_matches_updated_at 
     BEFORE UPDATE ON matches
-    FOR EACH ROW
-    EXECUTE FUNCTION update_modified_column();
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- دالة للبحث عن الكباتن المتاحين مع التقييمات (محسنة)
-CREATE OR REPLACE FUNCTION find_available_captains_in_area(
-    search_city TEXT,
-    search_neighborhood TEXT
-)
-RETURNS TABLE(
-    user_id BIGINT,
-    username TEXT,
-    full_name TEXT,
-    phone TEXT,
-    car_model TEXT,
-    car_plate TEXT,
-    city TEXT,
-    neighborhood TEXT,
-    neighborhood2 TEXT,
-    neighborhood3 TEXT,
-    is_available BOOLEAN,
-    avg_rating DECIMAL,
-    total_ratings INTEGER,
-    created_at TIMESTAMP
-) AS $$
-BEGIN
-    RETURN QUERY
-    SELECT 
-        u.user_id,
-        u.username,
-        u.full_name,
-        u.phone,
-        u.car_model,
-        u.car_plate,
-        u.city,
-        u.neighborhood,
-        u.neighborhood2,
-        u.neighborhood3,
-        u.is_available,
-        u.avg_rating,
-        u.total_ratings,
-        u.created_at
-    FROM users u
-    WHERE u.role = 'captain' 
-        AND u.is_available = TRUE 
-        AND u.city = search_city
-        AND (search_neighborhood = u.neighborhood 
-             OR search_neighborhood = u.neighborhood2 
-             OR search_neighborhood = u.neighborhood3)
-    ORDER BY u.avg_rating DESC, u.created_at ASC;
-END;
-$$ LANGUAGE plpgsql;
+-- إدراج بيانات تجريبية (اختيارية)
+INSERT INTO users (user_id, username, role, full_name, phone, city, neighborhood, agreement) VALUES
+(123456789, 'test_client', 'client', 'أحمد محمد', '0501234567', 'الرياض', 'الملك فهد', TRUE),
+(987654321, 'test_captain', 'captain', 'محمد أحمد', '0509876543', 'الرياض', 'الملك فهد', TRUE);
 
--- تحديث التقييمات الحالية للكباتن الموجودين
-UPDATE users 
-SET 
-    avg_rating = COALESCE((
-        SELECT AVG(rating)::DECIMAL(3,2) 
-        FROM ratings 
-        WHERE captain_id = users.user_id
-    ), 0),
-    total_ratings = COALESCE((
-        SELECT COUNT(*) 
-        FROM ratings 
-        WHERE captain_id = users.user_id
-    ), 0)
-WHERE role = 'captain';
+-- تحديث بيانات الكابتن التجريبي
+UPDATE users SET 
+    car_model = 'كامري 2020',
+    car_plate = 'أ ب ج 1234',
+    neighborhood2 = 'العليا',
+    neighborhood3 = 'الملك عبدالله'
+WHERE user_id = 987654321;
 
--- view محدث لإحصائيات الكباتن
-DROP VIEW IF EXISTS captain_stats;
+-- إنشاء view لإحصائيات الكباتن
 CREATE VIEW captain_stats AS
 SELECT 
     u.user_id,
     u.full_name,
-    u.city,
-    u.neighborhood,
-    u.neighborhood2,
-    u.neighborhood3,
     u.car_model,
     u.car_plate,
-    u.avg_rating,
-    u.total_ratings,
     u.is_available,
-    COUNT(m.id) as total_trips,
-    COUNT(CASE WHEN m.status = 'completed' THEN 1 END) as completed_trips,
-    COUNT(CASE WHEN m.status = 'in_progress' THEN 1 END) as active_trips
+    COUNT(m.id) as total_rides,
+    COUNT(CASE WHEN m.status = 'completed' THEN 1 END) as completed_rides,
+    COUNT(CASE WHEN m.status = 'in_progress' THEN 1 END) as active_rides,
+    COALESCE(AVG(r.rating), 0) as average_rating,
+    COUNT(r.id) as total_ratings
 FROM users u
 LEFT JOIN matches m ON u.user_id = m.captain_id
+LEFT JOIN ratings r ON m.id = r.match_id
 WHERE u.role = 'captain'
-GROUP BY u.user_id, u.full_name, u.city, u.neighborhood, u.neighborhood2, u.neighborhood3, 
-         u.car_model, u.car_plate, u.avg_rating, u.total_ratings, u.is_available;
+GROUP BY u.user_id, u.full_name, u.car_model, u.car_plate, u.is_available;
 
--- view لإحصائيات العملاء
-DROP VIEW IF EXISTS client_stats;
+-- إنشاء view لإحصائيات العملاء
 CREATE VIEW client_stats AS
 SELECT 
     u.user_id,
@@ -196,39 +115,65 @@ SELECT
     u.neighborhood,
     COUNT(m.id) as total_requests,
     COUNT(CASE WHEN m.status = 'completed' THEN 1 END) as completed_trips,
-    COUNT(CASE WHEN m.status = 'pending' THEN 1 END) as pending_requests
+    COUNT(CASE WHEN m.status = 'pending' THEN 1 END) as pending_requests,
+    COUNT(CASE WHEN m.status = 'cancelled' THEN 1 END) as cancelled_requests
 FROM users u
 LEFT JOIN matches m ON u.user_id = m.client_id
 WHERE u.role = 'client'
 GROUP BY u.user_id, u.full_name, u.city, u.neighborhood;
 
--- view للتقييمات التفصيلية
-DROP VIEW IF EXISTS detailed_ratings;
-CREATE VIEW detailed_ratings AS
-SELECT 
-    r.id,
-    r.rating,
-    r.comment,
-    r.created_at,
-    c.full_name as client_name,
-    cap.full_name as captain_name,
-    cap.car_model,
-    cap.car_plate,
-    m.destination
-FROM ratings r
-JOIN users c ON r.client_id = c.user_id
-JOIN users cap ON r.captain_id = cap.user_id
-JOIN matches m ON r.match_id = m.id
-ORDER BY r.created_at DESC;
+-- إنشاء دالة للبحث عن الكباتن المتاحين
+CREATE OR REPLACE FUNCTION find_available_captains_in_area(
+    search_city TEXT,
+    search_neighborhood TEXT
+)
+RETURNS TABLE(
+    user_id BIGINT,
+    full_name TEXT,
+    car_model TEXT,
+    car_plate TEXT,
+    phone TEXT,
+    neighborhood TEXT,
+    neighborhood2 TEXT,
+    neighborhood3 TEXT,
+    average_rating NUMERIC
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        u.user_id,
+        u.full_name,
+        u.car_model,
+        u.car_plate,
+        u.phone,
+        u.neighborhood,
+        u.neighborhood2,
+        u.neighborhood3,
+        COALESCE(AVG(r.rating), 0) as average_rating
+    FROM users u
+    LEFT JOIN matches m ON u.user_id = m.captain_id
+    LEFT JOIN ratings r ON m.id = r.match_id
+    WHERE u.role = 'captain' 
+        AND u.is_available = TRUE 
+        AND u.city = search_city
+        AND (search_neighborhood = u.neighborhood 
+             OR search_neighborhood = u.neighborhood2 
+             OR search_neighborhood = u.neighborhood3)
+    GROUP BY u.user_id, u.full_name, u.car_model, u.car_plate, u.phone, u.neighborhood, u.neighborhood2, u.neighborhood3
+    ORDER BY u.created_at ASC;
+END;
+$$ LANGUAGE plpgsql;
 
--- التحقق من التحديثات
-SELECT 'تم تحديث قاعدة البيانات بنجاح!' as status;
+-- إضافة تعليقات على الجداول
+COMMENT ON TABLE users IS 'جدول المستخدمين - العملاء والكباتن';
+COMMENT ON TABLE matches IS 'جدول المطابقات والطلبات';
+COMMENT ON TABLE ratings IS 'جدول التقييمات مع التعليقات والملاحظات';
 
--- عرض إحصائيات سريعة بعد التحديث
-SELECT 
-    'إحصائيات قاعدة البيانات:' as info,
-    (SELECT COUNT(*) FROM users WHERE role = 'client') as total_clients,
-    (SELECT COUNT(*) FROM users WHERE role = 'captain') as total_captains,
-    (SELECT COUNT(*) FROM matches) as total_matches,
-    (SELECT COUNT(*) FROM ratings) as total_ratings,
-    (SELECT COUNT(*) FROM message_cleanup) as cleanup_messages;
+COMMENT ON COLUMN ratings.comment IS 'تعليق العميل على الخدمة';
+COMMENT ON COLUMN ratings.notes IS 'ملاحظات خاصة من العميل';
+COMMENT ON COLUMN matches.destination IS 'الوجهة المطلوبة للرحلة';
+COMMENT ON COLUMN users.is_available IS 'حالة توفر الكابتن';
+
+-- منح الصلاحيات (قم بتعديل اسم المستخدم حسب الحاجة)
+-- GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO your_app_user;
+-- GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO your_app_user;
