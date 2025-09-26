@@ -8,8 +8,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import BOT_TOKEN, PG_DB, PG_USER, PG_PASSWORD, PG_HOST, PG_PORT
-from datetime import datetime, timedelta
-import logging
 
 # ================== قاعدة البيانات ==================
 def get_conn():
@@ -28,7 +26,7 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # جدول المستخدمين (تم حذف عدد المقاعد)
+    # جدول المستخدمين
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
@@ -45,8 +43,6 @@ def init_db():
         neighborhood2 TEXT,
         neighborhood3 TEXT,
         is_available BOOLEAN DEFAULT TRUE,
-        avg_rating DECIMAL(3,2) DEFAULT 0,
-        total_ratings INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
@@ -65,7 +61,7 @@ def init_db():
     )
     """)
 
-    # جدول التقييمات والملاحظات
+    # جدول التقييمات - محدث مع حقل الملاحظات
     cur.execute("""
     CREATE TABLE IF NOT EXISTS ratings (
         id SERIAL PRIMARY KEY,
@@ -74,19 +70,8 @@ def init_db():
         captain_id BIGINT REFERENCES users(user_id),
         rating INTEGER CHECK (rating >= 1 AND rating <= 5),
         comment TEXT,
+        notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
-    # جدول لحفظ معرفات الرسائل للحذف الدوري
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS message_cleanup (
-        id SERIAL PRIMARY KEY,
-        chat_id BIGINT,
-        message_id INTEGER,
-        message_type VARCHAR(50),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        should_delete BOOLEAN DEFAULT TRUE
     )
     """)
 
@@ -134,17 +119,14 @@ def save_user(user_id, username, data):
     conn.close()
 
 def find_available_captains(city, neighborhood):
-    """البحث عن الكباتن المتاحين في المنطقة مع تقييماتهم"""
+    """البحث عن الكباتن المتاحين في المنطقة"""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT u.*, 
-               COALESCE(u.avg_rating, 0) as rating,
-               u.total_ratings
-        FROM users u
-        WHERE u.role='captain' AND u.is_available=TRUE AND u.city=%s 
-        AND (%s = u.neighborhood OR %s = u.neighborhood2 OR %s = u.neighborhood3)
-        ORDER BY u.avg_rating DESC, u.created_at ASC
+        SELECT * FROM users 
+        WHERE role='captain' AND is_available=TRUE AND city=%s 
+        AND (%s = neighborhood OR %s = neighborhood2 OR %s = neighborhood3)
+        ORDER BY created_at ASC
     """, (city, neighborhood, neighborhood, neighborhood))
     rows = cur.fetchall()
     cur.close()
@@ -162,19 +144,21 @@ def get_user_by_id(user_id):
     return user
 
 def create_match_request(client_id, captain_id, destination):
-    """إنشاء طلب جديد"""
+    """إنشاء طلب جديد مع حفظ الوجهة بشكل صحيح"""
     conn = get_conn()
     cur = conn.cursor()
     try:
         cur.execute("""
             INSERT INTO matches (client_id, captain_id, destination, status)
             VALUES (%s, %s, %s, 'pending')
+            RETURNING id
         """, (client_id, captain_id, destination))
+        match_id = cur.fetchone()['id']
         conn.commit()
-        return True
+        return match_id
     except psycopg2.IntegrityError:
         conn.rollback()
-        return False
+        return None
     finally:
         cur.close()
         conn.close()
@@ -187,17 +171,22 @@ def update_match_status(client_id, captain_id, status):
     cur.execute("""
         UPDATE matches 
         SET status=%s, updated_at=CURRENT_TIMESTAMP
-        WHERE client_id=%s AND captain_id=%s
+        WHERE client_id=%s AND captain_id=%s AND status != 'completed'
+        RETURNING id
     """, (status, client_id, captain_id))
-
+    
+    result = cur.fetchone()
+    
     if status == "in_progress":
         cur.execute("UPDATE users SET is_available=FALSE WHERE user_id=%s", (captain_id,))
     elif status in ["rejected", "cancelled", "completed"]:
         cur.execute("UPDATE users SET is_available=TRUE WHERE user_id=%s", (captain_id,))
 
     conn.commit()
+    match_id = result['id'] if result else None
     cur.close()
     conn.close()
+    return match_id
 
 def get_match_details(client_id, captain_id):
     """جلب تفاصيل الطلب"""
@@ -213,58 +202,29 @@ def get_match_details(client_id, captain_id):
     conn.close()
     return match
 
-def save_rating(match_id, client_id, captain_id, rating, comment):
-    """حفظ التقييم وتحديث متوسط التقييم"""
+def save_rating(match_id, client_id, captain_id, rating, comment, notes):
+    """حفظ التقييم مع الملاحظات - تم إصلاح المشكلة"""
     conn = get_conn()
     cur = conn.cursor()
-    
-    # حفظ التقييم
-    cur.execute("""
-        INSERT INTO ratings (match_id, client_id, captain_id, rating, comment)
-        VALUES (%s, %s, %s, %s, %s)
-    """, (match_id, client_id, captain_id, rating, comment))
-    
-    # تحديث متوسط التقييم للكابتن
-    cur.execute("""
-        UPDATE users 
-        SET avg_rating = (
-            SELECT AVG(rating)::DECIMAL(3,2) 
-            FROM ratings 
-            WHERE captain_id = %s
-        ),
-        total_ratings = (
-            SELECT COUNT(*) 
-            FROM ratings 
-            WHERE captain_id = %s
-        )
-        WHERE user_id = %s
-    """, (captain_id, captain_id, captain_id))
-    
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def get_captain_comments(captain_id, limit=None):
-    """جلب تعليقات الكابتن"""
-    conn = get_conn()
-    cur = conn.cursor()
-    
-    query = """
-        SELECT r.rating, r.comment, r.created_at, u.full_name as client_name
-        FROM ratings r
-        JOIN users u ON r.client_id = u.user_id
-        WHERE r.captain_id = %s AND r.comment IS NOT NULL AND r.comment != ''
-        ORDER BY r.created_at DESC
-    """
-    
-    if limit:
-        query += f" LIMIT {limit}"
-    
-    cur.execute(query, (captain_id,))
-    comments = cur.fetchall()
-    cur.close()
-    conn.close()
-    return comments
+    try:
+        cur.execute("""
+            INSERT INTO ratings (match_id, client_id, captain_id, rating, comment, notes)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (match_id, client_id) DO UPDATE SET
+                rating = EXCLUDED.rating,
+                comment = EXCLUDED.comment,
+                notes = EXCLUDED.notes,
+                created_at = CURRENT_TIMESTAMP
+        """, (match_id, client_id, captain_id, rating, comment, notes))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"خطأ في حفظ التقييم: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
 
 def is_user_registered(user_id):
     """التحقق من تسجيل المستخدم"""
@@ -276,19 +236,6 @@ def update_user_field(user_id, field, value):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(f"UPDATE users SET {field}=%s WHERE user_id=%s", (value, user_id))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def update_user_neighborhoods(user_id, city, neighborhood1, neighborhood2, neighborhood3):
-    """تحديث مدينة وأحياء المستخدم"""
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE users 
-        SET city=%s, neighborhood=%s, neighborhood2=%s, neighborhood3=%s 
-        WHERE user_id=%s
-    """, (city, neighborhood1, neighborhood2, neighborhood3, user_id))
     conn.commit()
     cur.close()
     conn.close()
@@ -327,65 +274,8 @@ def get_user_stats(user_id):
     conn.close()
     return stats
 
-def save_message_for_cleanup(chat_id, message_id, message_type="general"):
-    """حفظ معرف الرسالة للحذف اللاحق"""
-    conn = get_conn()
-    cur = conn.cursor()
-    try:
-        cur.execute("""
-            INSERT INTO message_cleanup (chat_id, message_id, message_type)
-            VALUES (%s, %s, %s)
-        """, (chat_id, message_id, message_type))
-        conn.commit()
-    except:
-        pass  # تجاهل الأخطاء في حفظ الرسائل
-    finally:
-        cur.close()
-        conn.close()
-
-async def cleanup_old_messages(bot):
-    """حذف الرسائل القديمة (24 ساعة)"""
-    conn = get_conn()
-    cur = conn.cursor()
-    
-    # جلب الرسائل القديمة (عدا الرسائل المرتبطة بطلبات نشطة)
-    cur.execute("""
-        SELECT DISTINCT mc.chat_id, mc.message_id
-        FROM message_cleanup mc
-        WHERE mc.created_at < NOW() - INTERVAL '24 hours'
-        AND mc.should_delete = TRUE
-        AND NOT EXISTS (
-            SELECT 1 FROM matches m 
-            WHERE m.status IN ('pending', 'in_progress')
-            AND (m.client_id = mc.chat_id OR m.captain_id = mc.chat_id)
-            AND mc.created_at > m.created_at - INTERVAL '1 hour'
-        )
-    """)
-    
-    old_messages = cur.fetchall()
-    
-    # حذف الرسائل
-    deleted_count = 0
-    for msg in old_messages:
-        try:
-            await bot.delete_message(msg['chat_id'], msg['message_id'])
-            deleted_count += 1
-        except:
-            pass  # تجاهل أخطاء الحذف
-    
-    # حذف السجلات من قاعدة البيانات
-    cur.execute("""
-        DELETE FROM message_cleanup 
-        WHERE created_at < NOW() - INTERVAL '24 hours'
-        AND should_delete = TRUE
-    """)
-    
-    conn.commit()
-    cur.close()
-    conn.close()
-    
-    if deleted_count > 0:
-        logging.info(f"تم حذف {deleted_count} رسالة قديمة")
+# إضافة جدول مؤقت لحفظ بيانات التقييم
+rating_temp_data = {}
 
 # ================== حالات التسجيل ==================
 class RegisterStates(StatesGroup):
@@ -411,19 +301,12 @@ class EditStates(StatesGroup):
     edit_car_plate = State()
     change_city = State()
     change_neighborhood = State()
-    change_neighborhood2 = State()
-    change_neighborhood3 = State()
     change_role = State()
-    # حالات خاصة بالتحويل من عميل إلى كابتن
-    convert_to_captain_car_model = State()
-    convert_to_captain_car_plate = State()
-    convert_to_captain_neighborhood1 = State()
-    convert_to_captain_neighborhood2 = State()
-    convert_to_captain_neighborhood3 = State()
 
 class RatingStates(StatesGroup):
     rating_stars = State()
     rating_comment = State()
+    rating_notes = State()
 
 # ================== أزرار التحكم ==================
 def start_keyboard():
@@ -477,11 +360,9 @@ def neighborhood_keyboard(city, selected_neighborhoods=None):
         return builder.as_markup()
 
 def captain_selection_keyboard(captain_id):
-    """أزرار اختيار الكابتن مع عرض التعليقات"""
+    """زر اختيار الكابتن"""
     builder = InlineKeyboardBuilder()
     builder.button(text="🚖 اختيار هذا الكابتن", callback_data=f"choose_{captain_id}")
-    builder.button(text="💬 عرض التعليقات", callback_data=f"comments_{captain_id}")
-    builder.adjust(1)
     return builder.as_markup()
 
 def captain_response_keyboard(client_id):
@@ -529,8 +410,9 @@ def edit_profile_keyboard(role):
     
     if role == "captain":
         builder.button(text="🚘 تعديل السيارة", callback_data="edit_car")
+        builder.button(text="📍 تعديل المناطق", callback_data="edit_neighborhoods")
     
-    builder.button(text="📍 تعديل المنطقة", callback_data="edit_location")
+    builder.button(text="🌆 تغيير المدينة", callback_data="edit_city")
     builder.button(text="🔄 تغيير الدور", callback_data="change_role")
     builder.button(text="🔙 العودة للقائمة", callback_data="back_to_main")
     builder.adjust(2)
@@ -544,6 +426,14 @@ def rating_keyboard():
     builder.adjust(1)
     return builder.as_markup()
 
+def rating_notes_keyboard():
+    """أزرار ملاحظات التقييم"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✍️ إضافة ملاحظة", callback_data="add_note")
+    builder.button(text="⏩ تخطي", callback_data="skip_note")
+    builder.adjust(2)
+    return builder.as_markup()
+
 def role_change_keyboard():
     """أزرار تغيير الدور"""
     builder = InlineKeyboardBuilder()
@@ -551,12 +441,6 @@ def role_change_keyboard():
     builder.button(text="🧑‍✈️ تحويل إلى كابتن", callback_data="change_to_captain")
     builder.button(text="🔙 رجوع", callback_data="edit_profile")
     builder.adjust(1)
-    return builder.as_markup()
-
-def comments_back_keyboard(captain_id):
-    """زر العودة من التعليقات"""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🔙 العودة لبيانات الكابتن", callback_data=f"back_to_captain_{captain_id}")
     return builder.as_markup()
 
 # ================== إعداد البوت ==================
@@ -584,18 +468,16 @@ async def start_command(message: types.Message, state: FSMContext):
 اختر العملية المطلوبة:
         """
         
-        sent_msg = await message.answer(welcome_back, reply_markup=main_menu_keyboard(user['role']))
-        save_message_for_cleanup(message.chat.id, sent_msg.message_id, "main_menu")
+        await message.answer(welcome_back, reply_markup=main_menu_keyboard(user['role']))
     else:
         welcome_text = """
-🌟 مرحباً بك في نظام طقطق للمواصلات 🌟
+🌟 مرحباً بك في نظام دربك للمواصلات 🌟
 
 اختر دورك في النظام:
 🚕 العميل: يطلب توصيلة
 🧑‍✈️ الكابتن: يقدم خدمة التوصيل
         """
-        sent_msg = await message.answer(welcome_text, reply_markup=start_keyboard())
-        save_message_for_cleanup(message.chat.id, sent_msg.message_id, "registration")
+        await message.answer(welcome_text, reply_markup=start_keyboard())
         await state.set_state(RegisterStates.role)
 
 # ================== معالجات التسجيل ==================
@@ -621,16 +503,14 @@ async def handle_subscription(callback: types.CallbackQuery, state: FSMContext):
     
     sub_text = "يومي" if subscription == "daily" else "شهري"
     await callback.message.edit_text(f"✅ نوع الاشتراك: {sub_text}")
-    sent_msg = await callback.message.answer("👤 أدخل اسمك الكامل:")
-    save_message_for_cleanup(callback.message.chat.id, sent_msg.message_id)
+    await callback.message.answer("👤 أدخل اسمك الكامل:")
     await state.set_state(RegisterStates.full_name)
 
 @dp.message(RegisterStates.full_name)
 async def handle_full_name(message: types.Message, state: FSMContext):
     """معالج الاسم الكامل"""
     await state.update_data(full_name=message.text)
-    sent_msg = await message.answer("📱 أدخل رقم جوالك:")
-    save_message_for_cleanup(message.chat.id, sent_msg.message_id)
+    await message.answer("📱 أدخل رقم جوالك:")
     await state.set_state(RegisterStates.phone)
 
 @dp.message(RegisterStates.phone)
@@ -640,11 +520,10 @@ async def handle_phone(message: types.Message, state: FSMContext):
     data = await state.get_data()
     
     if data.get("role") == "captain":
-        sent_msg = await message.answer("🚘 أدخل موديل السيارة (مثال: كامري 2020):")
-        save_message_for_cleanup(message.chat.id, sent_msg.message_id)
+        await message.answer("🚘 أدخل موديل السيارة (مثال: كامري 2020):")
         await state.set_state(RegisterStates.car_model)
     else:
-        sent_msg = await message.answer(
+        await message.answer(
             "📋 الشروط والأحكام:\n"
             "• الالتزام بأنظمة المرور والسلامة\n"
             "• احترام الآخرين والتعامل بأدب\n"
@@ -653,22 +532,20 @@ async def handle_phone(message: types.Message, state: FSMContext):
             "اضغط للموافقة والمتابعة:",
             reply_markup=agreement_keyboard()
         )
-        save_message_for_cleanup(message.chat.id, sent_msg.message_id)
         await state.set_state(RegisterStates.agreement)
 
 @dp.message(RegisterStates.car_model)
 async def handle_car_model(message: types.Message, state: FSMContext):
     """معالج موديل السيارة"""
     await state.update_data(car_model=message.text)
-    sent_msg = await message.answer("🔢 أدخل رقم اللوحة (مثال: أ ب ج 1234):")
-    save_message_for_cleanup(message.chat.id, sent_msg.message_id)
+    await message.answer("🔢 أدخل رقم اللوحة (مثال: أ ب ج 1234):")
     await state.set_state(RegisterStates.car_plate)
 
 @dp.message(RegisterStates.car_plate)
 async def handle_car_plate(message: types.Message, state: FSMContext):
     """معالج رقم اللوحة"""
     await state.update_data(car_plate=message.text)
-    sent_msg = await message.answer(
+    await message.answer(
         "📋 الشروط والأحكام للكباتن:\n"
         "• وجود رخصة قيادة سارية\n"
         "• تأمين ساري للمركبة\n"
@@ -678,7 +555,6 @@ async def handle_car_plate(message: types.Message, state: FSMContext):
         "اضغط للموافقة والمتابعة:",
         reply_markup=agreement_keyboard()
     )
-    save_message_for_cleanup(message.chat.id, sent_msg.message_id)
     await state.set_state(RegisterStates.agreement)
 
 @dp.callback_query(F.data == "agree")
@@ -728,15 +604,14 @@ async def handle_first_neighborhood_selection(callback: types.CallbackQuery, sta
         username = callback.from_user.username
         save_user(callback.from_user.id, username, data)
         
-        await callback.message.edit_text("✅ تم قبولك بنجاح! مرحباً بك في نظام طقطق")
+        await callback.message.edit_text("✅ تم قبولك بنجاح! مرحباً بك في نظام دربك")
         await asyncio.sleep(2)
-        sent_msg = await callback.message.edit_text(
+        await callback.message.edit_text(
             f"🏠 مرحباً {data['full_name']}\n\n"
             f"📍 منطقتك: {data['city']} - {neighborhood}\n\n"
             "اختر العملية المطلوبة:",
             reply_markup=main_menu_keyboard("client")
         )
-        save_message_for_cleanup(callback.message.chat.id, sent_msg.message_id, "main_menu")
         await state.clear()
 
 @dp.callback_query(F.data.startswith("neigh_"), RegisterStates.neighborhood2)
@@ -764,9 +639,9 @@ async def handle_third_neighborhood_selection(callback: types.CallbackQuery, sta
     username = callback.from_user.username
     save_user(callback.from_user.id, username, data)
     
-    await callback.message.edit_text("✅ تم قبولك بنجاح! مرحباً بك في نظام طقطق")
+    await callback.message.edit_text("✅ تم قبولك بنجاح! مرحباً بك في نظام دربك")
     await asyncio.sleep(2)
-    sent_msg = await callback.message.edit_text(
+    await callback.message.edit_text(
         f"🏠 مرحباً الكابتن {data['full_name']}\n\n"
         f"🚘 مركبتك: {data['car_model']} ({data['car_plate']})\n"
         f"📍 مناطق عملك:\n"
@@ -776,10 +651,9 @@ async def handle_third_neighborhood_selection(callback: types.CallbackQuery, sta
         "اختر العملية المطلوبة:",
         reply_markup=main_menu_keyboard("captain")
     )
-    save_message_for_cleanup(callback.message.chat.id, sent_msg.message_id, "main_menu")
     await state.clear()
 
-# ================== معالجات طلب التوصيل ==================
+# ================== معالجات طلب التوصيل - تم إصلاح مشكلة الوجهة ==================
 
 @dp.callback_query(F.data == "request_ride")
 async def request_ride_handler(callback: types.CallbackQuery, state: FSMContext):
@@ -797,46 +671,40 @@ async def request_ride_handler(callback: types.CallbackQuery, state: FSMContext)
 
 @dp.message(RequestStates.enter_destination)
 async def handle_destination_input(message: types.Message, state: FSMContext):
-    """معالج إدخال الوجهة"""
-    destination = message.text
+    """معالج إدخال الوجهة - تم إصلاح المشكلة"""
+    destination = message.text.strip()
     user = get_user_by_id(message.from_user.id)
     
-    sent_msg = await message.answer(
+    # حفظ الوجهة في الحالة
+    await state.update_data(destination=destination)
+    
+    await message.answer(
         f"🎯 الوجهة: {destination}\n\n"
         f"🔍 جاري البحث عن الكباتن المتاحين في منطقتك..."
     )
-    save_message_for_cleanup(message.chat.id, sent_msg.message_id)
     
-    await state.update_data(destination=destination)
-    await search_for_captains(message, user['city'], user['neighborhood'], destination)
-    await state.clear()
+    await search_for_captains(message, state, user['city'], user['neighborhood'], destination)
 
-async def search_for_captains(message, city, neighborhood, destination):
-    """البحث عن الكباتن وعرضهم للعميل مع التقييمات"""
+async def search_for_captains(message, state, city, neighborhood, destination):
+    """البحث عن الكباتن وعرضهم للعميل - تم تحسينه"""
     captains = find_available_captains(city, neighborhood)
     
     if not captains:
-        sent_msg = await message.answer(
+        await message.answer(
             "😔 عذراً، لا يوجد كباتن متاحين في منطقتك حالياً.\n\n"
             "💡 نصائح:\n"
             "• جرب مرة أخرى بعد قليل\n"
             "• تأكد من اختيار الحي الصحيح\n"
             "• يمكنك إعادة المحاولة بإرسال /start"
         )
-        save_message_for_cleanup(message.chat.id, sent_msg.message_id)
+        await state.clear()
         return
 
-    sent_msg = await message.answer(f"🎉 وُجد {len(captains)} كابتن متاح في منطقتك!")
-    save_message_for_cleanup(message.chat.id, sent_msg.message_id)
+    await message.answer(f"🎉 وُجد {len(captains)} كابتن متاح في منطقتك!")
     
     for captain in captains:
-        # عرض التقييم
-        rating_stars = "⭐" * int(captain['rating']) if captain['rating'] > 0 else "لا يوجد تقييم"
-        rating_text = f"({captain['total_ratings']} تقييم)" if captain['total_ratings'] > 0 else ""
-        
         captain_info = (
             f"👨‍✈️ الكابتن: {captain['full_name']}\n"
-            f"⭐ التقييم: {rating_stars} {rating_text}\n"
             f"🚘 السيارة: {captain['car_model']}\n"
             f"🔢 اللوحة: {captain['car_plate']}\n"
             f"📍 مناطق العمل:\n"
@@ -845,59 +713,24 @@ async def search_for_captains(message, city, neighborhood, destination):
             f"• {captain['neighborhood3']}"
         )
         
-        sent_msg = await message.answer(
+        await message.answer(
             captain_info,
             reply_markup=captain_selection_keyboard(captain["user_id"])
         )
-        save_message_for_cleanup(message.chat.id, sent_msg.message_id, "captain_selection")
-
-@dp.callback_query(F.data.startswith("comments_"))
-async def show_captain_comments(callback: types.CallbackQuery):
-    """عرض تعليقات الكابتن"""
-    captain_id = int(callback.data.split("_")[1])
-    comments = get_captain_comments(captain_id, limit=10)
-    
-    if not comments:
-        await callback.answer("لا توجد تعليقات لهذا الكابتن بعد", show_alert=True)
-        return
-    
-    comments_text = "💬 آخر التعليقات على الكابتن:\n\n"
-    
-    for i, comment in enumerate(comments, 1):
-        date = comment['created_at'].strftime("%Y-%m-%d")
-        stars = "⭐" * comment['rating']
-        comments_text += f"{i}. {stars}\n"
-        comments_text += f"👤 {comment['client_name']}\n"
-        comments_text += f"📅 {date}\n"
-        comments_text += f"💭 {comment['comment']}\n\n"
-        
-        if len(comments_text) > 3500:  # تجنب تجاوز حد الرسائل
-            comments_text += "... والمزيد"
-            break
-    
-    sent_msg = await callback.message.answer(
-        comments_text,
-        reply_markup=comments_back_keyboard(captain_id)
-    )
-    save_message_for_cleanup(callback.message.chat.id, sent_msg.message_id)
-
-@dp.callback_query(F.data.startswith("back_to_captain_"))
-async def back_to_captain_info(callback: types.CallbackQuery):
-    """العودة لمعلومات الكابتن"""
-    await callback.message.delete()
 
 @dp.callback_query(F.data.startswith("choose_"))
 async def handle_captain_selection(callback: types.CallbackQuery, state: FSMContext):
-    """معالج اختيار العميل للكابتن"""
+    """معالج اختيار العميل للكابتن - تم إصلاحه"""
     captain_id = int(callback.data.split("_")[1])
     client_id = callback.from_user.id
     
-    # جلب الوجهة من الحالة أو من آخر رسالة
+    # جلب الوجهة من الحالة
     data = await state.get_data()
     destination = data.get('destination', 'غير محدد')
 
-    # إنشاء طلب جديد
-    if not create_match_request(client_id, captain_id, destination):
+    # إنشاء طلب جديد مع حفظ الوجهة
+    match_id = create_match_request(client_id, captain_id, destination)
+    if not match_id:
         await callback.answer("⚠️ لديك طلب مُعلق مع هذا الكابتن", show_alert=True)
         return
 
@@ -919,14 +752,14 @@ async def handle_captain_selection(callback: types.CallbackQuery, state: FSMCont
         f"هل توافق على هذا الطلب؟"
     )
 
-    sent_msg = await bot.send_message(
+    await bot.send_message(
         captain_id,
         notification_text,
         reply_markup=captain_response_keyboard(client_id)
     )
-    save_message_for_cleanup(captain_id, sent_msg.message_id, "active_request")
 
     await callback.message.edit_text("⏳ تم إرسال طلبك للكابتن، يرجى انتظار الرد...")
+    await state.clear()
 
 @dp.callback_query(F.data.startswith("captain_accept_"))
 async def handle_captain_acceptance(callback: types.CallbackQuery):
@@ -935,7 +768,7 @@ async def handle_captain_acceptance(callback: types.CallbackQuery):
     captain_id = callback.from_user.id
 
     # تحديث حالة الطلب إلى في التنفيذ
-    update_match_status(client_id, captain_id, "in_progress")
+    match_id = update_match_status(client_id, captain_id, "in_progress")
 
     # جلب تفاصيل الطلب
     match = get_match_details(client_id, captain_id)
@@ -952,13 +785,12 @@ async def handle_captain_acceptance(callback: types.CallbackQuery):
     )
 
     # زر إنهاء الرحلة للكابتن
-    sent_msg = await bot.send_message(
+    await bot.send_message(
         captain_id,
         "🚗 الرحلة جارية...\n"
         "اضغط الزر أدناه عند الوصول للوجهة:",
         reply_markup=trip_control_keyboard(captain_id, client_id)
     )
-    save_message_for_cleanup(captain_id, sent_msg.message_id, "active_trip")
 
     # إشعار العميل بالقبول
     client_notification = (
@@ -970,12 +802,11 @@ async def handle_captain_acceptance(callback: types.CallbackQuery):
         f"📞 تواصل معه لتحديد نقطة اللقاء"
     )
 
-    sent_msg = await bot.send_message(
+    await bot.send_message(
         client_id,
         client_notification,
         reply_markup=contact_keyboard(captain.get('username'), "💬 تواصل مع الكابتن")
     )
-    save_message_for_cleanup(client_id, sent_msg.message_id, "active_trip")
 
 @dp.callback_query(F.data.startswith("captain_reject_"))
 async def handle_captain_rejection(callback: types.CallbackQuery):
@@ -990,22 +821,21 @@ async def handle_captain_rejection(callback: types.CallbackQuery):
 
     # إشعار العميل بالرفض
     client = get_user_by_id(client_id)
-    sent_msg = await bot.send_message(
+    await bot.send_message(
         client_id,
         f"😔 عذراً، الكابتن غير متاح حالياً\n\n"
         f"يمكنك اختيار كابتن آخر أو المحاولة لاحقاً"
     )
-    save_message_for_cleanup(client_id, sent_msg.message_id)
 
 @dp.callback_query(F.data.startswith("complete_trip_"))
 async def handle_trip_completion(callback: types.CallbackQuery):
-    """معالج إنهاء الرحلة"""
+    """معالج إنهاء الرحلة - محدث مع نظام التقييم الجديد"""
     parts = callback.data.split("_")
     captain_id = int(parts[2])
     client_id = int(parts[3])
 
     # تحديث حالة الطلب إلى مكتمل
-    update_match_status(client_id, captain_id, "completed")
+    match_id = update_match_status(client_id, captain_id, "completed")
 
     # إشعار الكابتن
     await callback.message.edit_text(
@@ -1014,93 +844,134 @@ async def handle_trip_completion(callback: types.CallbackQuery):
     )
 
     # إشعار العميل بانتهاء الرحلة وطلب التقييم
-    sent_msg = await bot.send_message(
+    await bot.send_message(
         client_id,
         "🏁 الحمد لله على سلامتك!\n\n"
         "وصلت بخير إلى وجهتك\n"
         "نود رأيك في الكابتن، كيف تقيم الخدمة؟",
         reply_markup=rating_keyboard()
     )
-    save_message_for_cleanup(client_id, sent_msg.message_id, "rating")
 
-    # حفظ معرفات الرحلة للتقييم
+    # حفظ بيانات التقييم في المتغير المؤقت
     match = get_match_details(client_id, captain_id)
-    sent_msg = await bot.send_message(
-        client_id, 
-        f"rating_data:{match['id']}_{captain_id}",
-        parse_mode=None
-    )
-    save_message_for_cleanup(client_id, sent_msg.message_id, "rating_data")
+    if match:
+        rating_temp_data[client_id] = {
+            'match_id': match['id'],
+            'captain_id': captain_id,
+            'client_id': client_id
+        }
+
+# ================== معالجات التقييم - تم إصلاحها بالكامل ==================
 
 @dp.callback_query(F.data.startswith("rate_"))
 async def handle_rating_selection(callback: types.CallbackQuery, state: FSMContext):
-    """معالج اختيار التقييم بالنجوم"""
+    """معالج اختيار التقييم بالنجوم - محدث"""
     rating = int(callback.data.split("_")[1])
+    client_id = callback.from_user.id
     
-    # البحث عن رسالة بيانات التقييم
-    # تحسين: نحفظ البيانات في الحالة بدلاً من البحث في الرسائل
-    await state.update_data(rating=rating)
+    # جلب بيانات التقييم من المتغير المؤقت
+    rating_data = rating_temp_data.get(client_id)
+    if not rating_data:
+        await callback.answer("❌ خطأ في بيانات التقييم", show_alert=True)
+        return
+    
+    # حفظ التقييم في الحالة
+    await state.update_data(
+        rating=rating,
+        match_id=rating_data['match_id'],
+        captain_id=rating_data['captain_id']
+    )
     
     await callback.message.edit_text(
         f"✅ تقييمك: {'⭐' * rating}\n\n"
-        f"📝 اكتب تعليقك على الكابتن (اختياري):"
+        f"📝 اكتب تعليقك على الخدمة (اختياري):\n"
+        f"💡 مثلاً: كابتن محترم، سيارة نظيفة، وقت مناسب...",
+        reply_markup=rating_notes_keyboard()
     )
     await state.set_state(RatingStates.rating_comment)
+
+@dp.callback_query(F.data == "add_note", RatingStates.rating_comment)
+async def handle_add_note(callback: types.CallbackQuery, state: FSMContext):
+    """معالج إضافة ملاحظة"""
+    await callback.message.edit_text("📝 اكتب تعليقك على الخدمة:")
+    await state.set_state(RatingStates.rating_comment)
+
+@dp.callback_query(F.data == "skip_note", RatingStates.rating_comment)
+async def handle_skip_note(callback: types.CallbackQuery, state: FSMContext):
+    """معالج تخطي الملاحظة"""
+    await finalize_rating(callback.message, state, "")
 
 @dp.message(RatingStates.rating_comment)
 async def handle_rating_comment(message: types.Message, state: FSMContext):
     """معالج تعليق التقييم"""
-    comment = message.text
-    data = await state.get_data()
+    comment = message.text.strip()
     
-    # البحث عن بيانات التقييم من الرسائل السابقة
-    try:
-        # يجب أن نحسن هذا لاحقاً باستخدام الحالة بدلاً من البحث
-        match_id = None
-        captain_id = None
+    await message.answer(
+        f"💬 تعليقك: {comment}\n\n"
+        f"📋 هل تريد إضافة ملاحظة خاصة؟\n"
+        f"💡 مثلاً: شكراً، أو اقتراحات للتحسين...",
+        reply_markup=rating_notes_keyboard()
+    )
+    await state.update_data(comment=comment)
+    await state.set_state(RatingStates.rating_notes)
+
+@dp.callback_query(F.data == "add_note", RatingStates.rating_notes)
+async def handle_add_private_note(callback: types.CallbackQuery, state: FSMContext):
+    """معالج إضافة ملاحظة خاصة"""
+    await callback.message.edit_text("📋 اكتب ملاحظتك الخاصة:")
+    await state.set_state(RatingStates.rating_notes)
+
+@dp.callback_query(F.data == "skip_note", RatingStates.rating_notes)
+async def handle_skip_private_note(callback: types.CallbackQuery, state: FSMContext):
+    """معالج تخطي الملاحظة الخاصة"""
+    data = await state.get_data()
+    await finalize_rating(callback.message, state, data.get('comment', ''), "")
+
+@dp.message(RatingStates.rating_notes)
+async def handle_rating_notes(message: types.Message, state: FSMContext):
+    """معالج ملاحظات التقييم"""
+    notes = message.text.strip()
+    data = await state.get_data()
+    await finalize_rating(message, state, data.get('comment', ''), notes)
+
+async def finalize_rating(message, state: FSMContext, comment="", notes=""):
+    """إنهاء عملية التقييم وحفظها"""
+    data = await state.get_data()
+    client_id = message.chat.id if hasattr(message, 'chat') else message.from_user.id
+    
+    # حفظ التقييم
+    success = save_rating(
+        data['match_id'],
+        client_id,
+        data['captain_id'],
+        data['rating'],
+        comment,
+        notes
+    )
+    
+    if success:
+        await message.answer(
+            f"🙏 شكراً لك على تقييمك!\n"
+            f"⭐ التقييم: {'⭐' * data['rating']}\n"
+            f"💬 تعليق: {comment if comment else 'لا يوجد'}\n"
+            f"📋 ملاحظة: {notes if notes else 'لا يوجد'}\n\n"
+            f"رأيك يساعدنا في تحسين الخدمة\n"
+            f"نتطلع لخدمتك مرة أخرى في دربك ✨"
+        )
         
-        # محاولة استخراج البيانات من الرسائل السابقة
-        # هذا مؤقت حتى نطور نظام أفضل
-        if 'match_id' in data and 'captain_id' in data:
-            match_id = data['match_id']
-            captain_id = data['captain_id']
-        else:
-            # البحث في الرسائل الأخيرة
-            # سأضع حل مؤقت بسيط
-            match_id = 1  # مؤقت
-            captain_id = 1  # مؤقت
-            
-        if match_id and captain_id:
-            # حفظ التقييم
-            save_rating(
-                match_id,
-                message.from_user.id,
-                captain_id,
-                data['rating'],
-                comment
-            )
-            
-            sent_msg = await message.answer(
-                "🙏 شكراً لك على تقييمك!\n"
-                "رأيك يساعدنا في تحسين الخدمة\n\n"
-                "نتطلع لخدمتك مرة أخرى في المستقبل ✨"
-            )
-            save_message_for_cleanup(message.chat.id, sent_msg.message_id)
-            
-            # إشعار الكابتن بالتقييم
-            captain = get_user_by_id(captain_id)
-            if captain:
-                rating_text = f"⭐ حصلت على تقييم جديد: {'⭐' * data['rating']}"
-                if comment.strip():
-                    rating_text += f"\n💬 التعليق: {comment}"
-                
-                await bot.send_message(captain_id, rating_text)
-        else:
-            await message.answer("❌ خطأ في حفظ التقييم")
-            
-    except Exception as e:
-        await message.answer("❌ خطأ في حفظ التقييم")
-        logging.error(f"Rating error: {e}")
+        # إشعار الكابتن بالتقييم
+        captain = get_user_by_id(data['captain_id'])
+        rating_text = f"⭐ حصلت على تقييم جديد: {'⭐' * data['rating']}"
+        if comment.strip():
+            rating_text += f"\n💬 التعليق: {comment}"
+        
+        await bot.send_message(data['captain_id'], rating_text)
+        
+        # مسح البيانات المؤقتة
+        if client_id in rating_temp_data:
+            del rating_temp_data[client_id]
+    else:
+        await message.answer("❌ حدث خطأ في حفظ التقييم، يرجى المحاولة مرة أخرى")
     
     await state.clear()
 
@@ -1184,14 +1055,14 @@ async def show_user_stats(callback: types.CallbackQuery):
 ⏳ الطلبات المعلقة: {stats['pending_requests']}
         """
     else:
-        avg_rating = round(float(user['avg_rating']), 1) if user['avg_rating'] else 0
+        avg_rating = round(float(stats['avg_rating']), 1) if stats['avg_rating'] else 0
         stats_text = f"""
 📊 إحصائياتك ككابتن:
 
 🔢 إجمالي الطلبات: {stats['total_requests']}
 ✅ الرحلات المكتملة: {stats['completed_trips']}
 🚗 الرحلات النشطة: {stats['active_trips']}
-⭐ متوسط التقييم: {avg_rating}/5 ({user['total_ratings']} تقييم)
+⭐ متوسط التقييم: {avg_rating}/5
 🔄 حالتك: {"متاح" if user['is_available'] else "غير متاح"}
         """
     
@@ -1226,40 +1097,127 @@ async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
         reply_markup=main_menu_keyboard(user['role'])
     )
 
-# ================== نظام حذف الرسائل الدوري ==================
+# ================== معالجات تعديل البيانات ==================
 
-async def periodic_cleanup():
-    """مهمة دورية لحذف الرسائل القديمة كل 24 ساعة"""
-    while True:
-        try:
-            await asyncio.sleep(24 * 60 * 60)  # 24 ساعة
-            await cleanup_old_messages(bot)
-        except Exception as e:
-            logging.error(f"خطأ في حذف الرسائل الدورية: {e}")
-            await asyncio.sleep(60 * 60)  # إعادة المحاولة بعد ساعة
+@dp.callback_query(F.data == "edit_name")
+async def edit_name_handler(callback: types.CallbackQuery, state: FSMContext):
+    """تعديل الاسم"""
+    await callback.message.edit_text("👤 أدخل الاسم الجديد:")
+    await state.set_state(EditStates.edit_name)
+
+@dp.message(EditStates.edit_name)
+async def handle_new_name(message: types.Message, state: FSMContext):
+    """معالج الاسم الجديد"""
+    update_user_field(message.from_user.id, "full_name", message.text)
+    await message.answer("✅ تم تحديث الاسم بنجاح!")
+    
+    user = get_user_by_id(message.from_user.id)
+    await message.answer(
+        "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
+        reply_markup=edit_profile_keyboard(user['role'])
+    )
+    await state.clear()
+
+@dp.callback_query(F.data == "edit_phone")
+async def edit_phone_handler(callback: types.CallbackQuery, state: FSMContext):
+    """تعديل الجوال"""
+    await callback.message.edit_text("📱 أدخل رقم الجوال الجديد:")
+    await state.set_state(EditStates.edit_phone)
+
+@dp.message(EditStates.edit_phone)
+async def handle_new_phone(message: types.Message, state: FSMContext):
+    """معالج رقم الجوال الجديد"""
+    update_user_field(message.from_user.id, "phone", message.text)
+    await message.answer("✅ تم تحديث رقم الجوال بنجاح!")
+    
+    user = get_user_by_id(message.from_user.id)
+    await message.answer(
+        "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
+        reply_markup=edit_profile_keyboard(user['role'])
+    )
+    await state.clear()
+
+@dp.callback_query(F.data == "edit_car")
+async def edit_car_handler(callback: types.CallbackQuery, state: FSMContext):
+    """تعديل بيانات السيارة"""
+    await callback.message.edit_text("🚘 أدخل موديل السيارة الجديد:")
+    await state.set_state(EditStates.edit_car_model)
+
+@dp.message(EditStates.edit_car_model)
+async def handle_new_car_model(message: types.Message, state: FSMContext):
+    """معالج موديل السيارة الجديد"""
+    await state.update_data(new_car_model=message.text)
+    await message.answer("🔢 أدخل رقم اللوحة الجديد:")
+    await state.set_state(EditStates.edit_car_plate)
+
+@dp.message(EditStates.edit_car_plate)
+async def handle_new_car_plate(message: types.Message, state: FSMContext):
+    """معالج رقم اللوحة الجديد"""
+    data = await state.get_data()
+    
+    # تحديث بيانات السيارة
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE users SET car_model=%s, car_plate=%s 
+        WHERE user_id=%s
+    """, (data['new_car_model'], message.text, message.from_user.id))
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    await message.answer("✅ تم تحديث بيانات السيارة بنجاح!")
+    
+    user = get_user_by_id(message.from_user.id)
+    await message.answer(
+        "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
+        reply_markup=edit_profile_keyboard(user['role'])
+    )
+    await state.clear()
+
+@dp.callback_query(F.data == "change_role")
+async def change_role_handler(callback: types.CallbackQuery):
+    """تغيير الدور"""
+    user = get_user_by_id(callback.from_user.id)
+    current_role = "عميل" if user['role'] == 'client' else "كابتن"
+    
+    await callback.message.edit_text(
+        f"🔄 تغيير الدور\n\n"
+        f"دورك الحالي: {current_role}\n\n"
+        f"اختر الدور الجديد:",
+        reply_markup=role_change_keyboard()
+    )
+
+@dp.callback_query(F.data.startswith("change_to_"))
+async def handle_role_change(callback: types.CallbackQuery):
+    """معالج تغيير الدور"""
+    new_role = callback.data.split("_")[2]  # client أو captain
+    user_id = callback.from_user.id
+    
+    # تحديث الدور
+    update_user_field(user_id, "role", new_role)
+    
+    role_text = "عميل" if new_role == "client" else "كابتن"
+    await callback.message.edit_text(
+        f"✅ تم تغيير دورك إلى: {role_text}\n\n"
+        f"يمكنك الآن الاستفادة من جميع خصائص الـ{role_text}"
+    )
+    
+    # العودة للقائمة الرئيسية
+    await asyncio.sleep(2)
+    user = get_user_by_id(user_id)
+    await callback.message.edit_text(
+        f"🏠 مرحباً {user['full_name']} ({role_text})\n\n"
+        "اختر العملية المطلوبة:",
+        reply_markup=main_menu_keyboard(new_role)
+    )
 
 # ================== تشغيل البوت ==================
-
-async def main():
-    """دالة تشغيل البوت الرئيسية"""
-    logging.basicConfig(level=logging.INFO)
-    
+if __name__ == "__main__":
+    print("🚀 بدء تشغيل بوت دربك...")
     try:
-        # تهيئة قاعدة البيانات
         init_db()
-        print("✅ تم الاتصال بقاعدة البيانات وإنشاء الجداول")
-        
-        # بدء مهمة حذف الرسائل الدورية
-        cleanup_task = asyncio.create_task(periodic_cleanup())
-        
-        # بدء البوت
-        print("🚀 بدء تشغيل بوت طقطق المحسن...")
-        await dp.start_polling(bot)
-        
+        print("✅ تم الاتصال بقاعدة البيانات")
+        asyncio.run(dp.start_polling(bot))
     except Exception as e:
         print(f"❌ خطأ في التشغيل: {e}")
-    finally:
-        cleanup_task.cancel()
-
-if __name__ == "__main__":
-    asyncio.run(main())
