@@ -1,3 +1,4 @@
+-- حذف الجداول الموجودة
 DROP TABLE IF EXISTS ratings CASCADE;
 DROP TABLE IF EXISTS matches CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
