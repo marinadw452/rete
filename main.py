@@ -628,15 +628,20 @@ async def handle_first_neighborhood_selection(callback: types.CallbackQuery, sta
         username = callback.from_user.username
         save_user(callback.from_user.id, username, data)
         
-       await callback.message.edit_text("✅ تم قبولك بنجاح! مرحباً بك في نظام دربك")
-await asyncio.sleep(2)
-await callback.message.edit_text(
-    f"🏠 مرحباً {data['full_name']}\n\n"
-    f"📍 منطقتك: {data['city']} - {neighborhood}\n\n"
-    "اختر العملية المطلوبة:",
-    reply_markup=main_menu_keyboard("client")
-)
-await state.clear()
+        await callback.message.edit_text("✅ تم قبولك بنجاح! مرحباً بك في نظام دربك")
+    await asyncio.sleep(2)
+    await callback.message.edit_text(
+        f"🏠 مرحباً الكابتن {data['full_name']}\n\n"
+        f"🚘 مركبتك: {data['car_model']} ({data['car_plate']})\n"
+        f"📍 مناطق عملك:\n"
+        f"• {data['neighborhood']}\n"
+        f"• {neighborhood2}\n"
+        f"• {neighborhood3}\n\n"
+        "اختر العملية المطلوبة:",
+        reply_markup=main_menu_keyboard("captain")
+    )
+    await state.clear()
+
 # ================== معالجات طلب التوصيل ==================
 
 @dp.callback_query(F.data == "request_ride")
@@ -1244,9 +1249,6 @@ async def handle_third_neighborhood_selection(callback: types.CallbackQuery, sta
         reply_markup=main_menu_keyboard("captain")
     )
     await state.clear()
-    # هذا هو الكود المكتمل - تكملة للكود السابق
-
-# المتابعة من نقطة التوقف:
 
 @dp.callback_query(F.data.startswith("neigh_"), RegisterStates.neighborhood3)
 async def handle_third_neighborhood_selection(callback: types.CallbackQuery, state: FSMContext):
@@ -1604,4 +1606,13 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ خطأ في التشغيل: {e}")
 
-
+"""
+ملاحظات التحديث:
+1. تم إزالة جميع المراجع لعدد الركاب
+2. نظام التقييم أصبح مرن:
+   - يمكن تخطي التعليق والملاحظات
+   - عند التخطي يتم حفظ NULL في قاعدة البيانات
+   - خيارات متعددة في كل مرحلة
+3. تم تحسين واجهة المستخدم للتقييم
+4. دالة save_rating محدثة لدعم التخطي
+"""
