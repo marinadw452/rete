@@ -5,6 +5,8 @@ DROP TABLE IF EXISTS users CASCADE;
 
 -- حذف الدوال الموجودة
 DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;
+DROP FUNCTION IF EXISTS save_rating(INTEGER, BIGINT, BIGINT, INTEGER, TEXT, TEXT, BOOLEAN) CASCADE;
+DROP FUNCTION IF EXISTS find_available_captains_in_area(TEXT, TEXT) CASCADE;
 
 -- إنشاء جدول المستخدمين
 CREATE TABLE users (
@@ -25,7 +27,7 @@ CREATE TABLE users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- إنشاء جدول المطابقات
+-- إنشاء جدول المطابقات (بدون حقل عدد الركاب)
 CREATE TABLE matches (
     id SERIAL PRIMARY KEY,
     client_id BIGINT REFERENCES users(user_id),
@@ -39,15 +41,15 @@ CREATE TABLE matches (
     CONSTRAINT unique_pending_match UNIQUE (client_id, captain_id)
 );
 
--- إنشاء جدول التقييمات مع حقل الملاحظات الجديد
+-- إنشاء جدول التقييمات مع الحقول الاختيارية
 CREATE TABLE ratings (
     id SERIAL PRIMARY KEY,
     match_id INTEGER REFERENCES matches(id),
     client_id BIGINT REFERENCES users(user_id),
     captain_id BIGINT REFERENCES users(user_id),
     rating INTEGER CHECK (rating >= 1 AND rating <= 5),
-    comment TEXT,
-    notes TEXT,
+    comment TEXT DEFAULT NULL,
+    notes TEXT DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT unique_rating UNIQUE (match_id, client_id)
 );
@@ -74,6 +76,40 @@ $$ language 'plpgsql';
 CREATE TRIGGER update_matches_updated_at 
     BEFORE UPDATE ON matches
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- دالة حفظ التقييم مع إمكانية تخطي الملاحظات
+CREATE OR REPLACE FUNCTION save_rating(
+    p_match_id INTEGER,
+    p_client_id BIGINT,
+    p_captain_id BIGINT,
+    p_rating INTEGER,
+    p_comment TEXT DEFAULT NULL,
+    p_notes TEXT DEFAULT NULL,
+    p_skip_notes BOOLEAN DEFAULT FALSE
+)
+RETURNS INTEGER AS $$
+DECLARE
+    rating_id INTEGER;
+BEGIN
+    -- إذا تم اختيار تخطي الملاحظات، يتم تعيين القيم كـ NULL
+    IF p_skip_notes = TRUE THEN
+        p_comment := NULL;
+        p_notes := NULL;
+    END IF;
+    
+    INSERT INTO ratings (match_id, client_id, captain_id, rating, comment, notes)
+    VALUES (p_match_id, p_client_id, p_captain_id, p_rating, p_comment, p_notes)
+    ON CONFLICT (match_id, client_id) 
+    DO UPDATE SET 
+        rating = EXCLUDED.rating,
+        comment = EXCLUDED.comment,
+        notes = EXCLUDED.notes,
+        created_at = CURRENT_TIMESTAMP
+    RETURNING id INTO rating_id;
+    
+    RETURN rating_id;
+END;
+$$ LANGUAGE plpgsql;
 
 -- إدراج بيانات تجريبية (اختيارية)
 INSERT INTO users (user_id, username, role, full_name, phone, city, neighborhood, agreement) VALUES
@@ -168,13 +204,28 @@ $$ LANGUAGE plpgsql;
 -- إضافة تعليقات على الجداول
 COMMENT ON TABLE users IS 'جدول المستخدمين - العملاء والكباتن';
 COMMENT ON TABLE matches IS 'جدول المطابقات والطلبات';
-COMMENT ON TABLE ratings IS 'جدول التقييمات مع التعليقات والملاحظات';
+COMMENT ON TABLE ratings IS 'جدول التقييمات مع التعليقات والملاحظات الاختيارية';
 
-COMMENT ON COLUMN ratings.comment IS 'تعليق العميل على الخدمة';
-COMMENT ON COLUMN ratings.notes IS 'ملاحظات خاصة من العميل';
+COMMENT ON COLUMN ratings.comment IS 'تعليق العميل على الخدمة (اختياري)';
+COMMENT ON COLUMN ratings.notes IS 'ملاحظات خاصة من العميل (اختيارية)';
 COMMENT ON COLUMN matches.destination IS 'الوجهة المطلوبة للرحلة';
 COMMENT ON COLUMN users.is_available IS 'حالة توفر الكابتن';
 
 -- منح الصلاحيات (قم بتعديل اسم المستخدم حسب الحاجة)
 -- GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO your_app_user;
 -- GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO your_app_user;
+
+-- أمثلة على استخدام دالة حفظ التقييم
+/*
+-- حفظ تقييم مع ملاحظات كاملة
+SELECT save_rating(1, 123456789, 987654321, 5, 'خدمة ممتازة والكابتن محترم', 'شكراً جزيلاً، أنصح الجميع به', FALSE);
+
+-- حفظ تقييم مع تعليق فقط
+SELECT save_rating(2, 123456789, 987654321, 4, 'خدمة جيدة', NULL, FALSE);
+
+-- حفظ تقييم بدون أي ملاحظات (تخطي كامل)
+SELECT save_rating(3, 123456789, 987654321, 4, NULL, NULL, TRUE);
+
+-- حفظ تقييم بالنجوم فقط
+SELECT save_rating(4, 123456789, 987654321, 3, '', '', TRUE);
+*/
