@@ -628,20 +628,15 @@ async def handle_first_neighborhood_selection(callback: types.CallbackQuery, sta
         username = callback.from_user.username
         save_user(callback.from_user.id, username, data)
         
-        await callback.message.edit_text("✅ تم قبولك بنجاح! مرحباً بك في نظام دربك")
-    await asyncio.sleep(2)
-    await callback.message.edit_text(
-        f"🏠 مرحباً الكابتن {data['full_name']}\n\n"
-        f"🚘 مركبتك: {data['car_model']} ({data['car_plate']})\n"
-        f"📍 مناطق عملك:\n"
-        f"• {data['neighborhood']}\n"
-        f"• {neighborhood2}\n"
-        f"• {neighborhood3}\n\n"
-        "اختر العملية المطلوبة:",
-        reply_markup=main_menu_keyboard("captain")
-    )
-    await state.clear()
-
+       await callback.message.edit_text("✅ تم قبولك بنجاح! مرحباً بك في نظام دربك")
+await asyncio.sleep(2)
+await callback.message.edit_text(
+    f"🏠 مرحباً {data['full_name']}\n\n"
+    f"📍 منطقتك: {data['city']} - {neighborhood}\n\n"
+    "اختر العملية المطلوبة:",
+    reply_markup=main_menu_keyboard("client")
+)
+await state.clear()
 # ================== معالجات طلب التوصيل ==================
 
 @dp.callback_query(F.data == "request_ride")
@@ -1608,4 +1603,5 @@ if __name__ == "__main__":
         asyncio.run(dp.start_polling(bot))
     except Exception as e:
         print(f"❌ خطأ في التشغيل: {e}")
+
 
