@@ -1222,6 +1222,142 @@ async def handle_role_change(callback: types.CallbackQuery):
         "اختر العملية المطلوبة:",
         reply_markup=main_menu_keyboard(new_role)
     )
+    # ================== معالجات مفقودة لتعديل المدينة والمناطق ==================
+# أضف هذا الكود بعد معالجات تعديل البيانات الأخرى
+
+@dp.callback_query(F.data == "edit_city")
+async def edit_city_handler(callback: types.CallbackQuery, state: FSMContext):
+    """تعديل المدينة"""
+    await callback.message.edit_text(
+        "🌆 اختر المدينة الجديدة:",
+        reply_markup=city_keyboard()
+    )
+    await state.set_state(EditStates.change_city)
+
+@dp.callback_query(F.data.startswith("city_"), EditStates.change_city)
+async def handle_city_change(callback: types.CallbackQuery, state: FSMContext):
+    """معالج تغيير المدينة"""
+    new_city = callback.data.split("_")[1]
+    user_id = callback.from_user.id
+    
+    # تحديث المدينة
+    update_user_field(user_id, "city", new_city)
+    
+    await callback.message.edit_text(f"✅ تم تغيير المدينة إلى: {new_city}")
+    await asyncio.sleep(1)
+    
+    # العودة لقائمة التعديل
+    user = get_user_by_id(user_id)
+    await callback.message.edit_text(
+        "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
+        reply_markup=edit_profile_keyboard(user['role'])
+    )
+    await state.clear()
+
+@dp.callback_query(F.data == "edit_neighborhoods")
+async def edit_neighborhoods_handler(callback: types.CallbackQuery, state: FSMContext):
+    """تعديل المناطق للكابتن"""
+    user = get_user_by_id(callback.from_user.id)
+    if user['role'] != 'captain':
+        await callback.answer("❌ هذه الخاصية للكباتن فقط", show_alert=True)
+        return
+    
+    await callback.message.edit_text(
+        f"📍 مناطق عملك الحالية:\n"
+        f"• {user['neighborhood']}\n"
+        f"• {user['neighborhood2']}\n"
+        f"• {user['neighborhood3']}\n\n"
+        f"🏘️ اختر الحي الأول الجديد:",
+        reply_markup=neighborhood_keyboard(user['city'])
+    )
+    await state.set_state(EditStates.change_neighborhood)
+
+@dp.callback_query(F.data.startswith("neigh_"), EditStates.change_neighborhood)
+async def handle_neighborhood_change_first(callback: types.CallbackQuery, state: FSMContext):
+    """معالج تغيير الحي الأول"""
+    neighborhood1 = callback.data.replace("neigh_", "")
+    await state.update_data(new_neighborhood1=neighborhood1)
+    
+    user = get_user_by_id(callback.from_user.id)
+    await callback.message.edit_text(
+        f"✅ الحي الأول: {neighborhood1}\n\n🏘️ اختر الحي الثاني:",
+        reply_markup=neighborhood_keyboard(user['city'], [neighborhood1])
+    )
+    await state.set_state(EditStates.change_neighborhood)
+    await state.update_data(step="second")
+
+# إضافة state جديد للتمييز بين خطوات تعديل المناطق
+class EditNeighborhoodStates(StatesGroup):
+    first = State()
+    second = State()  
+    third = State()
+
+@dp.callback_query(F.data.startswith("neigh_"), EditStates.change_neighborhood)
+async def handle_neighborhood_change_steps(callback: types.CallbackQuery, state: FSMContext):
+    """معالج خطوات تغيير المناطق"""
+    neighborhood = callback.data.replace("neigh_", "")
+    data = await state.get_data()
+    step = data.get('step', 'first')
+    user = get_user_by_id(callback.from_user.id)
+    
+    if step == 'first' or 'new_neighborhood1' not in data:
+        # الحي الأول
+        await state.update_data(new_neighborhood1=neighborhood, step='second')
+        await callback.message.edit_text(
+            f"✅ الحي الأول: {neighborhood}\n\n🏘️ اختر الحي الثاني:",
+            reply_markup=neighborhood_keyboard(user['city'], [neighborhood])
+        )
+    
+    elif step == 'second':
+        # الحي الثاني
+        selected = [data['new_neighborhood1'], neighborhood]
+        await state.update_data(new_neighborhood2=neighborhood, step='third')
+        await callback.message.edit_text(
+            f"✅ الحي الثاني: {neighborhood}\n\n🏘️ اختر الحي الثالث:",
+            reply_markup=neighborhood_keyboard(user['city'], selected)
+        )
+    
+    elif step == 'third':
+        # الحي الثالث - إنهاء التحديث
+        await state.update_data(new_neighborhood3=neighborhood)
+        data = await state.get_data()
+        
+        # تحديث جميع المناطق في قاعدة البيانات
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE users SET 
+                neighborhood=%s, 
+                neighborhood2=%s, 
+                neighborhood3=%s 
+            WHERE user_id=%s
+        """, (
+            data['new_neighborhood1'], 
+            data['new_neighborhood2'], 
+            neighborhood, 
+            callback.from_user.id
+        ))
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        await callback.message.edit_text(
+            f"✅ تم تحديث مناطق العمل بنجاح!\n\n"
+            f"المناطق الجديدة:\n"
+            f"• {data['new_neighborhood1']}\n"
+            f"• {data['new_neighborhood2']}\n"
+            f"• {neighborhood}"
+        )
+        
+        await asyncio.sleep(2)
+        
+        # العودة لقائمة التعديل
+        user = get_user_by_id(callback.from_user.id)
+        await callback.message.edit_text(
+            "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
+            reply_markup=edit_profile_keyboard(user['role'])
+        )
+        await state.clear()
 
 # ================== تشغيل البوت ==================
 if __name__ == "__main__":
@@ -1232,3 +1368,4 @@ if __name__ == "__main__":
         asyncio.run(dp.start_polling(bot))
     except Exception as e:
         print(f"❌ خطأ في التشغيل: {e}")
+
