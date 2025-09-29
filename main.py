@@ -1181,9 +1181,7 @@ async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
     role_text = "العميل" if user['role'] == 'client' else "الكابتن"
     status_text = ""
     
-    if user['role'] == 'captain':
-        status_text = f"\n
-        if user['role'] == 'captain':
+   if user['role'] == 'captain':
         status_text = f"\n🟢 الحالة: {'متاح' if user['is_available'] else 'غير متاح'}"
     
     main_menu_text = f"""
