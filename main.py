@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from config import BOT_TOKEN, PG_DB, PG_USER, PG_PASSWORD, PG_HOST, PG_PORT
 
 # ================== قاعدة البيانات ==================
@@ -26,7 +26,6 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # جدول المستخدمين
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
@@ -47,7 +46,6 @@ def init_db():
     )
     """)
 
-    # جدول المطابقات/الطلبات
     cur.execute("""
     CREATE TABLE IF NOT EXISTS matches (
         id SERIAL PRIMARY KEY,
@@ -61,7 +59,6 @@ def init_db():
     )
     """)
 
-    # جدول التقييمات - محدث بدون عدد الركاب وملاحظات اختيارية
     cur.execute("""
     CREATE TABLE IF NOT EXISTS ratings (
         id SERIAL PRIMARY KEY,
@@ -69,10 +66,9 @@ def init_db():
         client_id BIGINT REFERENCES users(user_id),
         captain_id BIGINT REFERENCES users(user_id),
         rating INTEGER CHECK (rating >= 1 AND rating <= 5),
-        comment TEXT DEFAULT NULL,
-        notes TEXT DEFAULT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT unique_rating UNIQUE (match_id, client_id)
+        comment TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
 
@@ -203,15 +199,11 @@ def get_match_details(client_id, captain_id):
     conn.close()
     return match
 
-def save_rating(match_id, client_id, captain_id, rating, comment=None, notes=None, skip_notes=False):
-    """حفظ التقييم مع إمكانية تخطي الملاحظات - محدث"""
+def save_rating(match_id, client_id, captain_id, rating, comment, notes):
+    """حفظ التقييم مع الملاحظات - تم إصلاح المشكلة"""
     conn = get_conn()
     cur = conn.cursor()
     try:
-        if skip_notes:
-            comment = None
-            notes = None
-            
         cur.execute("""
             INSERT INTO ratings (match_id, client_id, captain_id, rating, comment, notes)
             VALUES (%s, %s, %s, %s, %s, %s)
@@ -220,16 +212,13 @@ def save_rating(match_id, client_id, captain_id, rating, comment=None, notes=Non
                 comment = EXCLUDED.comment,
                 notes = EXCLUDED.notes,
                 created_at = CURRENT_TIMESTAMP
-            RETURNING id
-        """, (match_id, client_id, captain_id, rating, comment, notes))
-        
-        rating_id = cur.fetchone()['id']
+        """, (match_id, client_id, captain_id, rating, comment or "", notes or ""))
         conn.commit()
-        return rating_id
+        return True
     except Exception as e:
         conn.rollback()
         print(f"خطأ في حفظ التقييم: {e}")
-        return None
+        return False
     finally:
         cur.close()
         conn.close()
@@ -282,7 +271,6 @@ def get_user_stats(user_id):
     conn.close()
     return stats
 
-# إضافة جدول مؤقت لحفظ بيانات التقييم
 rating_temp_data = {}
 
 # ================== حالات التسجيل ==================
@@ -315,10 +303,28 @@ class RatingStates(StatesGroup):
     rating_stars = State()
     rating_comment = State()
     rating_notes = State()
+    # ================== أزرار التحكم - مع الواجهة الثابتة ==================
 
-# ================== أزرار التحكم ==================
+def get_main_keyboard(role):
+    """لوحة المفاتيح الثابتة حسب نوع المستخدم"""
+    keyboard = ReplyKeyboardBuilder()
+    
+    if role == "client":
+        keyboard.button(text="🚕 طلب توصيلة")
+        keyboard.button(text="📊 إحصائياتي")
+        keyboard.button(text="⚙️ تعديل البيانات")
+        keyboard.button(text="📞 اتصل بنا")
+    else:
+        keyboard.button(text="🟢 متاح للعمل")
+        keyboard.button(text="🔴 غير متاح")
+        keyboard.button(text="📊 إحصائياتي")
+        keyboard.button(text="⚙️ تعديل البيانات")
+        keyboard.button(text="📞 اتصل بنا")
+    
+    keyboard.adjust(2, 2, 1)
+    return keyboard.as_markup(resize_keyboard=True)
+
 def start_keyboard():
-    """أزرار اختيار الدور"""
     builder = InlineKeyboardBuilder()
     builder.button(text="🚕 عميل", callback_data="role_client")
     builder.button(text="🧑‍✈️ كابتن", callback_data="role_captain")
@@ -326,7 +332,6 @@ def start_keyboard():
     return builder.as_markup()
 
 def subscription_keyboard():
-    """أزرار نوع الاشتراك"""
     builder = InlineKeyboardBuilder()
     builder.button(text="📅 يومي", callback_data="sub_daily")
     builder.button(text="📆 شهري", callback_data="sub_monthly")
@@ -334,13 +339,11 @@ def subscription_keyboard():
     return builder.as_markup()
 
 def agreement_keyboard():
-    """زر الموافقة على الشروط"""
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ أوافق على الشروط والأحكام", callback_data="agree")
     return builder.as_markup()
 
 def city_keyboard():
-    """أزرار اختيار المدينة"""
     builder = InlineKeyboardBuilder()
     builder.button(text="🏙️ الرياض", callback_data="city_الرياض")
     builder.button(text="🌆 جدة", callback_data="city_جدة")
@@ -348,7 +351,6 @@ def city_keyboard():
     return builder.as_markup()
 
 def neighborhood_keyboard(city, selected_neighborhoods=None):
-    """أزرار اختيار الحي"""
     try:
         with open("neighborhoods.json", "r", encoding="utf-8") as f:
             neighborhoods_data = json.load(f)
@@ -368,13 +370,11 @@ def neighborhood_keyboard(city, selected_neighborhoods=None):
         return builder.as_markup()
 
 def captain_selection_keyboard(captain_id):
-    """زر اختيار الكابتن"""
     builder = InlineKeyboardBuilder()
     builder.button(text="🚖 اختيار هذا الكابتن", callback_data=f"choose_{captain_id}")
     return builder.as_markup()
 
 def captain_response_keyboard(client_id):
-    """أزرار رد الكابتن"""
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ قبول الطلب", callback_data=f"captain_accept_{client_id}")
     builder.button(text="❌ رفض الطلب", callback_data=f"captain_reject_{client_id}")
@@ -382,25 +382,22 @@ def captain_response_keyboard(client_id):
     return builder.as_markup()
 
 def trip_control_keyboard(captain_id, client_id):
-    """أزرار التحكم في الرحلة"""
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ تم الوصول - إنهاء الرحلة", callback_data=f"complete_trip_{captain_id}_{client_id}")
     return builder.as_markup()
 
 def contact_keyboard(username, text="💬 تواصل"):
-    """زر التواصل"""
     builder = InlineKeyboardBuilder()
     if username:
         builder.button(text=text, url=f"https://t.me/{username}")
     return builder.as_markup()
 
 def main_menu_keyboard(role):
-    """القائمة الرئيسية للمستخدم المسجل"""
     builder = InlineKeyboardBuilder()
     
     if role == "client":
         builder.button(text="🚕 طلب توصيلة", callback_data="request_ride")
-    else:  # captain
+    else:
         builder.button(text="🟢 متاح للتوصيل", callback_data="set_available")
         builder.button(text="🔴 غير متاح", callback_data="set_unavailable")
     
@@ -410,9 +407,7 @@ def main_menu_keyboard(role):
     return builder.as_markup()
 
 def edit_profile_keyboard(role):
-    """أزرار تعديل البيانات"""
     builder = InlineKeyboardBuilder()
-    
     builder.button(text="👤 تعديل الاسم", callback_data="edit_name")
     builder.button(text="📱 تعديل الجوال", callback_data="edit_phone")
     
@@ -427,38 +422,20 @@ def edit_profile_keyboard(role):
     return builder.as_markup()
 
 def rating_keyboard():
-    """أزرار التقييم"""
     builder = InlineKeyboardBuilder()
     for i in range(1, 6):
         builder.button(text=f"{'⭐' * i}", callback_data=f"rate_{i}")
     builder.adjust(1)
     return builder.as_markup()
 
-def rating_options_keyboard():
-    """أزرار خيارات التقييم - محدث"""
+def rating_notes_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.button(text="✍️ إضافة تعليق", callback_data="add_comment")
-    builder.button(text="⏩ تخطي وحفظ التقييم", callback_data="save_rating_only")
+    builder.button(text="✍️ إضافة ملاحظة", callback_data="add_note")
+    builder.button(text="✅ إنهاء التقييم", callback_data="skip_note")
     builder.adjust(2)
     return builder.as_markup()
 
-def comment_options_keyboard():
-    """أزرار خيارات التعليق"""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="📝 إضافة ملاحظة خاصة", callback_data="add_private_note")
-    builder.button(text="✅ حفظ التقييم", callback_data="save_with_comment")
-    builder.adjust(1)
-    return builder.as_markup()
-
-def notes_options_keyboard():
-    """أزرار خيارات الملاحظة"""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✅ حفظ التقييم النهائي", callback_data="save_final_rating")
-    builder.adjust(1)
-    return builder.as_markup()
-
 def role_change_keyboard():
-    """أزرار تغيير الدور"""
     builder = InlineKeyboardBuilder()
     builder.button(text="🚕 تحويل إلى عميل", callback_data="change_to_client")
     builder.button(text="🧑‍✈️ تحويل إلى كابتن", callback_data="change_to_captain")
@@ -469,11 +446,11 @@ def role_change_keyboard():
 # ================== إعداد البوت ==================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
+
 # ================== معالجات الأحداث ==================
 
 @dp.message(F.text == "/start")
 async def start_command(message: types.Message, state: FSMContext):
-    """بداية التسجيل أو القائمة الرئيسية"""
     await state.clear()
     user_id = message.from_user.id
     
@@ -487,10 +464,10 @@ async def start_command(message: types.Message, state: FSMContext):
 أنت مسجل كـ {role_text} في منطقة:
 📍 {user['city']}
 
-اختر العملية المطلوبة:
+استخدم الأزرار أدناه للتنقل:
         """
         
-        await message.answer(welcome_back, reply_markup=main_menu_keyboard(user['role']))
+        await message.answer(welcome_back, reply_markup=get_main_keyboard(user['role']))
     else:
         welcome_text = """
 🌟 مرحباً بك في نظام دربك للمواصلات 🌟
@@ -502,11 +479,125 @@ async def start_command(message: types.Message, state: FSMContext):
         await message.answer(welcome_text, reply_markup=start_keyboard())
         await state.set_state(RegisterStates.role)
 
-# ================== معالجات التسجيل ==================
+# ================== معالجات الأزرار الثابتة ==================
+
+@dp.message(F.text == "🚕 طلب توصيلة")
+async def request_ride_text(message: types.Message, state: FSMContext):
+    user = get_user_by_id(message.from_user.id)
+    if not user:
+        await message.answer("❌ يجب التسجيل أولاً. أرسل /start")
+        return
+    
+    await message.answer(
+        f"📍 موقعك الحالي: {user['city']} - {user['neighborhood']}\n\n"
+        f"🎯 اكتب اسم المنطقة أو المكان الذي تريد الذهاب إليه:"
+    )
+    await state.set_state(RequestStates.enter_destination)
+
+@dp.message(F.text == "🟢 متاح للعمل")
+async def set_available_text(message: types.Message):
+    user = get_user_by_id(message.from_user.id)
+    if not user:
+        await message.answer("❌ يجب التسجيل أولاً. أرسل /start")
+        return
+        
+    update_user_field(message.from_user.id, "is_available", True)
+    await message.answer(
+        "🟢 تم تعيينك كمتاح للتوصيل!\n\n"
+        "سيتم إشعارك عند وصول طلبات جديدة..."
+    )
+
+@dp.message(F.text == "🔴 غير متاح")
+async def set_unavailable_text(message: types.Message):
+    user = get_user_by_id(message.from_user.id)
+    if not user:
+        await message.answer("❌ يجب التسجيل أولاً. أرسل /start")
+        return
+        
+    update_user_field(message.from_user.id, "is_available", False)
+    await message.answer(
+        "🔴 تم تعيينك كغير متاح للتوصيل\n\n"
+        "لن تصلك طلبات جديدة حتى تقوم بتفعيل الحالة مرة أخرى"
+    )
+
+@dp.message(F.text == "📊 إحصائياتي")
+async def show_stats_text(message: types.Message):
+    user = get_user_by_id(message.from_user.id)
+    if not user:
+        await message.answer("❌ يجب التسجيل أولاً. أرسل /start")
+        return
+    
+    stats = get_user_stats(message.from_user.id)
+    
+    if user['role'] == 'client':
+        stats_text = f"""
+📊 إحصائياتك كعميل:
+
+🔢 إجمالي الطلبات: {stats['total_requests']}
+✅ الرحلات المكتملة: {stats['completed_trips']}
+⏳ الطلبات المعلقة: {stats['pending_requests']}
+        """
+    else:
+        avg_rating = round(float(stats['avg_rating']), 1) if stats['avg_rating'] else 0
+        stats_text = f"""
+📊 إحصائياتك ككابتن:
+
+🔢 إجمالي الطلبات: {stats['total_requests']}
+✅ الرحلات المكتملة: {stats['completed_trips']}
+🚗 الرحلات النشطة: {stats['active_trips']}
+⭐ متوسط التقييم: {avg_rating}/5
+🔄 حالتك: {"متاح" if user['is_available'] else "غير متاح"}
+        """
+    
+    await message.answer(stats_text)
+
+@dp.message(F.text == "⚙️ تعديل البيانات")
+async def edit_profile_text(message: types.Message):
+    user = get_user_by_id(message.from_user.id)
+    if not user:
+        await message.answer("❌ يجب التسجيل أولاً. أرسل /start")
+        return
+    
+    profile_info = f"""
+👤 بياناتك الحالية:
+
+📛 الاسم: {user['full_name']}
+📱 الجوال: {user['phone']}
+📍 المدينة: {user['city']}
+    """
+    
+    if user['role'] == 'captain':
+        profile_info += f"""
+🚘 السيارة: {user['car_model']}
+🔢 اللوحة: {user['car_plate']}
+📍 مناطق العمل:
+- {user['neighborhood']}
+- {user['neighborhood2']}  
+- {user['neighborhood3']}
+        """
+    else:
+        profile_info += f"🏘️ الحي: {user['neighborhood']}"
+    
+    profile_info += "\n\nاختر البيان الذي تريد تعديله:"
+    
+    await message.answer(profile_info, reply_markup=edit_profile_keyboard(user['role']))
+
+@dp.message(F.text == "📞 اتصل بنا")
+async def contact_us_text(message: types.Message):
+    contact_info = """
+📞 للتواصل والاستفسارات:
+
+📱 الجوال: 0501234567
+📧 البريد: support@darbak.com
+⏰ ساعات العمل: 24/7
+
+💡 يمكنك أيضاً إرسال استفسارك هنا وسنرد عليك قريباً
+    """
+    await message.answer(contact_info)
+    # ================== معالجات التسجيل ==================
 
 @dp.callback_query(F.data.startswith("role_"))
 async def handle_role_selection(callback: types.CallbackQuery, state: FSMContext):
-    """معالج اختيار الدور"""
     role = callback.data.split("_")[1]
     await state.update_data(role=role)
     
@@ -519,7 +610,6 @@ async def handle_role_selection(callback: types.CallbackQuery, state: FSMContext
 
 @dp.callback_query(F.data.startswith("sub_"))
 async def handle_subscription(callback: types.CallbackQuery, state: FSMContext):
-    """معالج نوع الاشتراك"""
     subscription = callback.data.split("_")[1]
     await state.update_data(subscription=subscription)
     
@@ -530,14 +620,12 @@ async def handle_subscription(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(RegisterStates.full_name)
 async def handle_full_name(message: types.Message, state: FSMContext):
-    """معالج الاسم الكامل"""
     await state.update_data(full_name=message.text)
     await message.answer("📱 أدخل رقم جوالك:")
     await state.set_state(RegisterStates.phone)
 
 @dp.message(RegisterStates.phone)
 async def handle_phone(message: types.Message, state: FSMContext):
-    """معالج رقم الجوال"""
     await state.update_data(phone=message.text)
     data = await state.get_data()
     
@@ -558,14 +646,12 @@ async def handle_phone(message: types.Message, state: FSMContext):
 
 @dp.message(RegisterStates.car_model)
 async def handle_car_model(message: types.Message, state: FSMContext):
-    """معالج موديل السيارة"""
     await state.update_data(car_model=message.text)
     await message.answer("🔢 أدخل رقم اللوحة (مثال: أ ب ج 1234):")
     await state.set_state(RegisterStates.car_plate)
 
 @dp.message(RegisterStates.car_plate)
 async def handle_car_plate(message: types.Message, state: FSMContext):
-    """معالج رقم اللوحة"""
     await state.update_data(car_plate=message.text)
     await message.answer(
         "📋 الشروط والأحكام للكباتن:\n"
@@ -581,7 +667,6 @@ async def handle_car_plate(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "agree")
 async def handle_agreement(callback: types.CallbackQuery, state: FSMContext):
-    """معالج الموافقة على الشروط"""
     await state.update_data(agreement=True)
     await callback.message.edit_text(
         "✅ تمت الموافقة على الشروط\n\n🌆 اختر مدينتك:",
@@ -591,7 +676,6 @@ async def handle_agreement(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("city_"), RegisterStates.city)
 async def handle_city_selection(callback: types.CallbackQuery, state: FSMContext):
-    """معالج اختيار المدينة"""
     city = callback.data.split("_")[1]
     await state.update_data(city=city)
     
@@ -610,7 +694,6 @@ async def handle_city_selection(callback: types.CallbackQuery, state: FSMContext
 
 @dp.callback_query(F.data.startswith("neigh_"), RegisterStates.neighborhood)
 async def handle_first_neighborhood_selection(callback: types.CallbackQuery, state: FSMContext):
-    """معالج اختيار الحي الأول"""
     neighborhood = callback.data.replace("neigh_", "")
     await state.update_data(neighborhood=neighborhood)
     data = await state.get_data()
@@ -622,64 +705,106 @@ async def handle_first_neighborhood_selection(callback: types.CallbackQuery, sta
         )
         await state.set_state(RegisterStates.neighborhood2)
     else:
-        # العميل - إنهاء التسجيل
         username = callback.from_user.username
         save_user(callback.from_user.id, username, data)
         
         await callback.message.edit_text("✅ تم قبولك بنجاح! مرحباً بك في نظام دربك")
         await asyncio.sleep(2)
-        await callback.message.edit_text(
-            f"🏠 مرحباً {data['full_name']}\n\n"
+        await callback.message.delete()
+        await bot.send_message(
+            callback.from_user.id,
+            f"🎉 مرحباً {data['full_name']}\n\n"
             f"📍 منطقتك: {data['city']} - {neighborhood}\n\n"
-            "اختر العملية المطلوبة:",
-            reply_markup=main_menu_keyboard("client")
+            "استخدم الأزرار أدناه للتنقل:",
+            reply_markup=get_main_keyboard("client")
         )
         await state.clear()
 
 @dp.callback_query(F.data.startswith("neigh_"), RegisterStates.neighborhood2)
 async def handle_second_neighborhood_selection(callback: types.CallbackQuery, state: FSMContext):
-    """معالج اختيار الحي الثاني للكابتن"""
     neighborhood2 = callback.data.replace("neigh_", "")
     await state.update_data(neighborhood2=neighborhood2)
     data = await state.get_data()
     
-    selected = [data['neighborhood'], neighborhood2]
-    await callback.message.edit_text(
-        f"✅ الحي الثاني: {neighborhood2}\n\n🏘️ اختر الحي الثالث:",
-        reply_markup=neighborhood_keyboard(data['city'], selected)
-    )
-    await state.set_state(RegisterStates.neighborhood3)
+    # إذا كان في وضع التعديل
+    if 'new_neighborhood' in data:
+        await state.update_data(new_neighborhood2=neighborhood2)
+        selected = [data.get('new_neighborhood'), neighborhood2]
+        user = get_user_by_id(callback.from_user.id)
+        
+        await callback.message.edit_text(
+            f"✅ الحي الثاني: {neighborhood2}\n\n🏘️ اختر الحي الثالث:",
+            reply_markup=neighborhood_keyboard(user['city'], selected)
+        )
+        await state.set_state(RegisterStates.neighborhood3)
+    else:
+        # وضع التسجيل
+        selected = [data['neighborhood'], neighborhood2]
+        await callback.message.edit_text(
+            f"✅ الحي الثاني: {neighborhood2}\n\n🏘️ اختر الحي الثالث:",
+            reply_markup=neighborhood_keyboard(data['city'], selected)
+        )
+        await state.set_state(RegisterStates.neighborhood3)
 
 @dp.callback_query(F.data.startswith("neigh_"), RegisterStates.neighborhood3)
 async def handle_third_neighborhood_selection(callback: types.CallbackQuery, state: FSMContext):
-    """معالج اختيار الحي الثالث للكابتن"""
     neighborhood3 = callback.data.replace("neigh_", "")
     await state.update_data(neighborhood3=neighborhood3)
     data = await state.get_data()
     
-    # حفظ بيانات الكابتن
-    username = callback.from_user.username
-    save_user(callback.from_user.id, username, data)
-    
-    await callback.message.edit_text("✅ تم قبولك بنجاح! مرحباً بك في نظام دربك")
-    await asyncio.sleep(2)
-    await callback.message.edit_text(
-        f"🏠 مرحباً الكابتن {data['full_name']}\n\n"
-        f"🚘 مركبتك: {data['car_model']} ({data['car_plate']})\n"
-        f"📍 مناطق عملك:\n"
-        f"• {data['neighborhood']}\n"
-        f"• {data['neighborhood2']}\n"
-        f"• {neighborhood3}\n\n"
-        "اختر العملية المطلوبة:",
-        reply_markup=main_menu_keyboard("captain")
-    )
-    await state.clear()
+    # إذا كان في وضع التعديل
+    if 'new_neighborhood' in data:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE users SET neighborhood=%s, neighborhood2=%s, neighborhood3=%s 
+            WHERE user_id=%s
+        """, (data['new_neighborhood'], data['new_neighborhood2'], neighborhood3, callback.from_user.id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        user = get_user_by_id(callback.from_user.id)
+        await callback.message.edit_text(
+            f"✅ تم تحديث مناطق العمل بنجاح!\n\n"
+            f"📍 مناطقك الجديدة:\n"
+            f"• {data['new_neighborhood']}\n"
+            f"• {data['new_neighborhood2']}\n"
+            f"• {neighborhood3}"
+        )
+        await asyncio.sleep(2)
+        await callback.message.delete()
+        await bot.send_message(
+            callback.from_user.id,
+            "✅ تم التحديث بنجاح",
+            reply_markup=get_main_keyboard(user['role'])
+        )
+        await state.clear()
+    else:
+        # وضع التسجيل
+        username = callback.from_user.username
+        save_user(callback.from_user.id, username, data)
+        
+        await callback.message.edit_text("✅ تم قبولك بنجاح! مرحباً بك في نظام دربك")
+        await asyncio.sleep(2)
+        await callback.message.delete()
+        await bot.send_message(
+            callback.from_user.id,
+            f"🎉 مرحباً الكابتن {data['full_name']}\n\n"
+            f"🚘 مركبتك: {data['car_model']} ({data['car_plate']})\n"
+            f"📍 مناطق عملك:\n"
+            f"• {data['neighborhood']}\n"
+            f"• {neighborhood2}\n"
+            f"• {neighborhood3}\n\n"
+            "استخدم الأزرار أدناه للتنقل:",
+            reply_markup=get_main_keyboard("captain")
+        )
+        await state.clear()
 
 # ================== معالجات طلب التوصيل ==================
 
 @dp.callback_query(F.data == "request_ride")
 async def request_ride_handler(callback: types.CallbackQuery, state: FSMContext):
-    """طلب توصيلة جديدة"""
     user = get_user_by_id(callback.from_user.id)
     if not user:
         await callback.answer("❌ خطأ في البيانات", show_alert=True)
@@ -693,7 +818,6 @@ async def request_ride_handler(callback: types.CallbackQuery, state: FSMContext)
 
 @dp.message(RequestStates.enter_destination)
 async def handle_destination_input(message: types.Message, state: FSMContext):
-    """معالج إدخال الوجهة"""
     destination = message.text.strip()
     user = get_user_by_id(message.from_user.id)
     
@@ -707,7 +831,6 @@ async def handle_destination_input(message: types.Message, state: FSMContext):
     await search_for_captains(message, state, user['city'], user['neighborhood'], destination)
 
 async def search_for_captains(message, state, city, neighborhood, destination):
-    """البحث عن الكباتن وعرضهم للعميل"""
     captains = find_available_captains(city, neighborhood)
     
     if not captains:
@@ -716,7 +839,7 @@ async def search_for_captains(message, state, city, neighborhood, destination):
             "💡 نصائح:\n"
             "• جرب مرة أخرى بعد قليل\n"
             "• تأكد من اختيار الحي الصحيح\n"
-            "• يمكنك إعادة المحاولة بإرسال /start"
+            "• يمكنك تجربة طلب توصيلة مرة أخرى"
         )
         await state.clear()
         return
@@ -734,14 +857,10 @@ async def search_for_captains(message, state, city, neighborhood, destination):
             f"• {captain['neighborhood3']}"
         )
         
-        await message.answer(
-            captain_info,
-            reply_markup=captain_selection_keyboard(captain["user_id"])
-        )
+        await message.answer(captain_info, reply_markup=captain_selection_keyboard(captain["user_id"]))
 
 @dp.callback_query(F.data.startswith("choose_"))
 async def handle_captain_selection(callback: types.CallbackQuery, state: FSMContext):
-    """معالج اختيار العميل للكابتن"""
     captain_id = int(callback.data.split("_")[1])
     client_id = callback.from_user.id
     
@@ -769,18 +888,12 @@ async def handle_captain_selection(callback: types.CallbackQuery, state: FSMCont
         f"هل توافق على هذا الطلب؟"
     )
 
-    await bot.send_message(
-        captain_id,
-        notification_text,
-        reply_markup=captain_response_keyboard(client_id)
-    )
-
+    await bot.send_message(captain_id, notification_text, reply_markup=captain_response_keyboard(client_id))
     await callback.message.edit_text("⏳ تم إرسال طلبك للكابتن، يرجى انتظار الرد...")
     await state.clear()
 
 @dp.callback_query(F.data.startswith("captain_accept_"))
 async def handle_captain_acceptance(callback: types.CallbackQuery):
-    """معالج قبول الكابتن للطلب"""
     client_id = int(callback.data.split("_")[2])
     captain_id = callback.from_user.id
 
@@ -814,21 +927,17 @@ async def handle_captain_acceptance(callback: types.CallbackQuery):
         f"📞 تواصل معه لتحديد نقطة اللقاء"
     )
 
-    await bot.send_message(
-        client_id,
-        client_notification,
-        reply_markup=contact_keyboard(captain.get('username'), "💬 تواصل مع الكابتن")
-    )
+    await bot.send_message(client_id, client_notification, reply_markup=contact_keyboard(captain.get('username'), "💬 تواصل مع الكابتن"))
 
 @dp.callback_query(F.data.startswith("captain_reject_"))
 async def handle_captain_rejection(callback: types.CallbackQuery):
-    """معالج رفض الكابتن للطلب"""
     client_id = int(callback.data.split("_")[2])
     captain_id = callback.from_user.id
 
     update_match_status(client_id, captain_id, "rejected")
     await callback.message.edit_text("❌ تم رفض الطلب")
 
+    client = get_user_by_id(client_id)
     await bot.send_message(
         client_id,
         f"😔 عذراً، الكابتن غير متاح حالياً\n\n"
@@ -837,7 +946,6 @@ async def handle_captain_rejection(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("complete_trip_"))
 async def handle_trip_completion(callback: types.CallbackQuery):
-    """معالج إنهاء الرحلة"""
     parts = callback.data.split("_")
     captain_id = int(parts[2])
     client_id = int(parts[3])
@@ -865,11 +973,10 @@ async def handle_trip_completion(callback: types.CallbackQuery):
             'client_id': client_id
         }
 
-# ================== معالجات التقييم المحدثة ==================
+# ================== معالجات التقييم ==================
 
 @dp.callback_query(F.data.startswith("rate_"))
 async def handle_rating_selection(callback: types.CallbackQuery, state: FSMContext):
-    """معالج اختيار التقييم بالنجوم"""
     rating = int(callback.data.split("_")[1])
     client_id = callback.from_user.id
     
@@ -886,106 +993,94 @@ async def handle_rating_selection(callback: types.CallbackQuery, state: FSMConte
     
     await callback.message.edit_text(
         f"✅ تقييمك: {'⭐' * rating}\n\n"
-        f"اختر ما تريد فعله:",
-        reply_markup=rating_options_keyboard()
+        f"📝 اكتب تعليقك على الخدمة (اختياري):\n"
+        f"💡 مثلاً: كابتن محترم، سيارة نظيفة، وقت مناسب...",
+        reply_markup=rating_notes_keyboard()
     )
     await state.set_state(RatingStates.rating_comment)
 
-@dp.callback_query(F.data == "add_comment", RatingStates.rating_comment)
-async def handle_add_comment(callback: types.CallbackQuery, state: FSMContext):
-    """معالج إضافة تعليق"""
+@dp.callback_query(F.data == "add_note", RatingStates.rating_comment)
+async def handle_add_note(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("📝 اكتب تعليقك على الخدمة:")
+    await state.set_state(RatingStates.rating_comment)
 
-@dp.callback_query(F.data == "save_rating_only", RatingStates.rating_comment)
-async def handle_save_rating_only(callback: types.CallbackQuery, state: FSMContext):
-    """معالج حفظ التقييم فقط بدون تعليق"""
-    await finalize_rating(callback.message, state, skip_all=True)
+@dp.callback_query(F.data == "skip_note", RatingStates.rating_comment)
+async def handle_skip_note_comment(callback: types.CallbackQuery, state: FSMContext):
+    await finalize_rating(callback.message, state, "", "", callback.from_user.id)
 
 @dp.message(RatingStates.rating_comment)
 async def handle_rating_comment(message: types.Message, state: FSMContext):
-    """معالج تعليق التقييم"""
     comment = message.text.strip()
-    await state.update_data(comment=comment)
     
     await message.answer(
         f"💬 تعليقك: {comment}\n\n"
-        f"اختر ما تريد فعله:",
-        reply_markup=comment_options_keyboard()
+        f"📋 هل تريد إضافة ملاحظة خاصة؟\n"
+        f"💡 مثلاً: شكراً، أو اقتراحات للتحسين...",
+        reply_markup=rating_notes_keyboard()
     )
+    await state.update_data(comment=comment)
     await state.set_state(RatingStates.rating_notes)
 
-@dp.callback_query(F.data == "add_private_note", RatingStates.rating_notes)
+@dp.callback_query(F.data == "add_note", RatingStates.rating_notes)
 async def handle_add_private_note(callback: types.CallbackQuery, state: FSMContext):
-    """معالج إضافة ملاحظة خاصة"""
     await callback.message.edit_text("📋 اكتب ملاحظتك الخاصة:")
+    await state.set_state(RatingStates.rating_notes)
 
-@dp.callback_query(F.data == "save_with_comment", RatingStates.rating_notes)
-async def handle_save_with_comment(callback: types.CallbackQuery, state: FSMContext):
-    """معالج حفظ التقييم مع التعليق فقط"""
+@dp.callback_query(F.data == "skip_note", RatingStates.rating_notes)
+async def handle_skip_private_note(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    await finalize_rating(callback.message, state, comment=data.get('comment', ''))
+    await finalize_rating(callback.message, state, data.get('comment', ''), "", callback.from_user.id)
 
 @dp.message(RatingStates.rating_notes)
 async def handle_rating_notes(message: types.Message, state: FSMContext):
-    """معالج ملاحظات التقييم"""
     notes = message.text.strip()
-    await state.update_data(notes=notes)
-    
-    await message.answer(
-        f"📋 ملاحظتك: {notes}\n\n"
-        f"اضغط لحفظ التقييم النهائي:",
-        reply_markup=notes_options_keyboard()
-    )
-
-@dp.callback_query(F.data == "save_final_rating")
-async def handle_save_final_rating(callback: types.CallbackQuery, state: FSMContext):
-    """معالج حفظ التقييم النهائي"""
     data = await state.get_data()
-    await finalize_rating(
-        callback.message, 
-        state, 
-        comment=data.get('comment', ''), 
-        notes=data.get('notes', '')
-    )
+    await finalize_rating(message, state, data.get('comment', ''), notes, message.from_user.id)
 
-async def finalize_rating(message, state: FSMContext, comment="", notes="", skip_all=False):
-    """إنهاء عملية التقييم وحفظها"""
+async def finalize_rating(message, state: FSMContext, comment="", notes="", client_id=None):
     data = await state.get_data()
-    client_id = message.chat.id if hasattr(message, 'chat') else message.from_user.id
+    if not client_id:
+        client_id = message.from_user.id
     
-    rating_id = save_rating(
+    success = save_rating(
         data['match_id'],
         client_id,
         data['captain_id'],
         data['rating'],
-        comment if not skip_all else None,
-        notes if not skip_all else None,
-        skip_notes=skip_all
+        comment,
+        notes
     )
     
-    if rating_id:
-        thank_you_msg = f"🙏 شكراً لك على تقييمك!\n⭐ التقييم: {'⭐' * data['rating']}"
+    client = get_user_by_id(client_id)
+    
+    if success:
+        rating_summary = f"""
+🙏 شكراً لك على تقييمك!
+
+⭐ التقييم: {'⭐' * data['rating']}
+💬 التعليق: {comment if comment else 'لا يوجد'}
+📋 الملاحظة: {notes if notes else 'لا يوجد'}
+
+رأيك يساعدنا في تحسين الخدمة
+نتطلع لخدمتك مرة أخرى في دربك ✨
+        """
         
-        if not skip_all:
-            if comment:
-                thank_you_msg += f"\n💬 تعليق: {comment}"
-            if notes:
-                thank_you_msg += f"\n📋 ملاحظة: {notes}"
+        await message.answer(rating_summary, reply_markup=get_main_keyboard(client['role']))
         
-        thank_you_msg += "\n\nرأيك يساعدنا في تحسين الخدمة\nنتطلع لخدمتك مرة أخرى في دربك ✨"
+        captain = get_user_by_id(data['captain_id'])
+        rating_text = f"⭐ حصلت على تقييم جديد: {'⭐' * data['rating']}"
+        if comment.strip():
+            rating_text += f"\n💬 التعليق: {comment}"
         
-        await message.answer(thank_you_msg)
-        
-        captain_msg = f"⭐ حصلت على تقييم جديد: {'⭐' * data['rating']}"
-        if comment and not skip_all:
-            captain_msg += f"\n💬 التعليق: {comment}"
-        
-        await bot.send_message(data['captain_id'], captain_msg)
+        await bot.send_message(data['captain_id'], rating_text)
         
         if client_id in rating_temp_data:
             del rating_temp_data[client_id]
     else:
-        await message.answer("❌ حدث خطأ في حفظ التقييم، يرجى المحاولة مرة أخرى")
+        await message.answer(
+            "❌ حدث خطأ في حفظ التقييم، يرجى المحاولة مرة أخرى",
+            reply_markup=get_main_keyboard(client['role'])
+        )
     
     await state.clear()
 
@@ -993,7 +1088,6 @@ async def finalize_rating(message, state: FSMContext, comment="", notes="", skip
 
 @dp.callback_query(F.data == "set_available")
 async def set_captain_available(callback: types.CallbackQuery):
-    """تعيين الكابتن كمتاح"""
     user_id = callback.from_user.id
     update_user_field(user_id, "is_available", True)
     
@@ -1005,7 +1099,6 @@ async def set_captain_available(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "set_unavailable")
 async def set_captain_unavailable(callback: types.CallbackQuery):
-    """تعيين الكابتن كغير متاح"""
     user_id = callback.from_user.id
     update_user_field(user_id, "is_available", False)
     
@@ -1017,7 +1110,6 @@ async def set_captain_unavailable(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "edit_profile")
 async def edit_profile_handler(callback: types.CallbackQuery):
-    """تعديل البيانات الشخصية"""
     user = get_user_by_id(callback.from_user.id)
     if not user:
         await callback.answer("❌ خطأ في البيانات", show_alert=True)
@@ -1036,23 +1128,19 @@ async def edit_profile_handler(callback: types.CallbackQuery):
 🚘 السيارة: {user['car_model']}
 🔢 اللوحة: {user['car_plate']}
 📍 مناطق العمل:
-• {user['neighborhood']}
-• {user['neighborhood2']}  
-• {user['neighborhood3']}
+- {user['neighborhood']}
+- {user['neighborhood2']}  
+- {user['neighborhood3']}
         """
     else:
         profile_info += f"🏘️ الحي: {user['neighborhood']}"
     
     profile_info += "\n\nاختر البيان الذي تريد تعديله:"
     
-    await callback.message.edit_text(
-        profile_info,
-        reply_markup=edit_profile_keyboard(user['role'])
-    )
+    await callback.message.edit_text(profile_info, reply_markup=edit_profile_keyboard(user['role']))
 
 @dp.callback_query(F.data == "my_stats")
 async def show_user_stats(callback: types.CallbackQuery):
-    """عرض إحصائيات المستخدم"""
     user = get_user_by_id(callback.from_user.id)
     stats = get_user_stats(callback.from_user.id)
     
@@ -1087,7 +1175,6 @@ async def show_user_stats(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
-    """العودة للقائمة الرئيسية"""
     await state.clear()
     user = get_user_by_id(callback.from_user.id)
     
@@ -1095,6 +1182,8 @@ async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
     status_text = ""
     
     if user['role'] == 'captain':
+        status_text = f"\n
+        if user['role'] == 'captain':
         status_text = f"\n🟢 الحالة: {'متاح' if user['is_available'] else 'غير متاح'}"
     
     main_menu_text = f"""
@@ -1103,70 +1192,55 @@ async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
 👤 {user['full_name']} ({role_text})
 📍 {user['city']}{status_text}
 
-اختر العملية المطلوبة:
+استخدم الأزرار أدناه للتنقل:
     """
     
-    await callback.message.edit_text(
+    await callback.message.delete()
+    await bot.send_message(
+        callback.from_user.id,
         main_menu_text,
-        reply_markup=main_menu_keyboard(user['role'])
+        reply_markup=get_main_keyboard(user['role'])
     )
 
 # ================== معالجات تعديل البيانات ==================
 
 @dp.callback_query(F.data == "edit_name")
 async def edit_name_handler(callback: types.CallbackQuery, state: FSMContext):
-    """تعديل الاسم"""
     await callback.message.edit_text("👤 أدخل الاسم الجديد:")
     await state.set_state(EditStates.edit_name)
 
 @dp.message(EditStates.edit_name)
 async def handle_new_name(message: types.Message, state: FSMContext):
-    """معالج الاسم الجديد"""
     update_user_field(message.from_user.id, "full_name", message.text)
-    await message.answer("✅ تم تحديث الاسم بنجاح!")
-    
     user = get_user_by_id(message.from_user.id)
-    await message.answer(
-        "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
-        reply_markup=edit_profile_keyboard(user['role'])
-    )
+    await message.answer("✅ تم تحديث الاسم بنجاح!", reply_markup=get_main_keyboard(user['role']))
     await state.clear()
 
 @dp.callback_query(F.data == "edit_phone")
 async def edit_phone_handler(callback: types.CallbackQuery, state: FSMContext):
-    """تعديل الجوال"""
     await callback.message.edit_text("📱 أدخل رقم الجوال الجديد:")
     await state.set_state(EditStates.edit_phone)
 
 @dp.message(EditStates.edit_phone)
 async def handle_new_phone(message: types.Message, state: FSMContext):
-    """معالج رقم الجوال الجديد"""
     update_user_field(message.from_user.id, "phone", message.text)
-    await message.answer("✅ تم تحديث رقم الجوال بنجاح!")
-    
     user = get_user_by_id(message.from_user.id)
-    await message.answer(
-        "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
-        reply_markup=edit_profile_keyboard(user['role'])
-    )
+    await message.answer("✅ تم تحديث رقم الجوال بنجاح!", reply_markup=get_main_keyboard(user['role']))
     await state.clear()
 
 @dp.callback_query(F.data == "edit_car")
 async def edit_car_handler(callback: types.CallbackQuery, state: FSMContext):
-    """تعديل بيانات السيارة"""
     await callback.message.edit_text("🚘 أدخل موديل السيارة الجديد:")
     await state.set_state(EditStates.edit_car_model)
 
 @dp.message(EditStates.edit_car_model)
 async def handle_new_car_model(message: types.Message, state: FSMContext):
-    """معالج موديل السيارة الجديد"""
     await state.update_data(new_car_model=message.text)
     await message.answer("🔢 أدخل رقم اللوحة الجديد:")
     await state.set_state(EditStates.edit_car_plate)
 
 @dp.message(EditStates.edit_car_plate)
 async def handle_new_car_plate(message: types.Message, state: FSMContext):
-    """معالج رقم اللوحة الجديد"""
     data = await state.get_data()
     
     conn = get_conn()
@@ -1179,87 +1253,15 @@ async def handle_new_car_plate(message: types.Message, state: FSMContext):
     cur.close()
     conn.close()
     
-    await message.answer("✅ تم تحديث بيانات السيارة بنجاح!")
-    
     user = get_user_by_id(message.from_user.id)
-    await message.answer(
-        "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
-        reply_markup=edit_profile_keyboard(user['role'])
-    )
-    await state.clear()
-
-@dp.callback_query(F.data == "change_role")
-async def change_role_handler(callback: types.CallbackQuery):
-    """تغيير الدور"""
-    user = get_user_by_id(callback.from_user.id)
-    current_role = "عميل" if user['role'] == 'client' else "كابتن"
-    
-    await callback.message.edit_text(
-        f"🔄 تغيير الدور\n\n"
-        f"دورك الحالي: {current_role}\n\n"
-        f"اختر الدور الجديد:",
-        reply_markup=role_change_keyboard()
-    )
-
-@dp.callback_query(F.data.startswith("change_to_"))
-async def handle_role_change(callback: types.CallbackQuery):
-    """معالج تغيير الدور"""
-    new_role = callback.data.split("_")[2]
-    user_id = callback.from_user.id
-    
-    update_user_field(user_id, "role", new_role)
-    
-    role_text = "عميل" if new_role == "client" else "كابتن"
-    await callback.message.edit_text(
-        f"✅ تم تغيير دورك إلى: {role_text}\n\n"
-        f"يمكنك الآن الاستفادة من جميع خصائص الـ{role_text}"
-    )
-    
-    await asyncio.sleep(2)
-    user = get_user_by_id(user_id)
-    await callback.message.edit_text(
-        f"🏠 مرحباً {user['full_name']} ({role_text})\n\n"
-        "اختر العملية المطلوبة:",
-        reply_markup=main_menu_keyboard(new_role)
-    )
-    # ================== معالجات مفقودة لتعديل المدينة والمناطق ==================
-# أضف هذا الكود بعد معالجات تعديل البيانات الأخرى
-
-@dp.callback_query(F.data == "edit_city")
-async def edit_city_handler(callback: types.CallbackQuery, state: FSMContext):
-    """تعديل المدينة"""
-    await callback.message.edit_text(
-        "🌆 اختر المدينة الجديدة:",
-        reply_markup=city_keyboard()
-    )
-    await state.set_state(EditStates.change_city)
-
-@dp.callback_query(F.data.startswith("city_"), EditStates.change_city)
-async def handle_city_change(callback: types.CallbackQuery, state: FSMContext):
-    """معالج تغيير المدينة"""
-    new_city = callback.data.split("_")[1]
-    user_id = callback.from_user.id
-    
-    # تحديث المدينة
-    update_user_field(user_id, "city", new_city)
-    
-    await callback.message.edit_text(f"✅ تم تغيير المدينة إلى: {new_city}")
-    await asyncio.sleep(1)
-    
-    # العودة لقائمة التعديل
-    user = get_user_by_id(user_id)
-    await callback.message.edit_text(
-        "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
-        reply_markup=edit_profile_keyboard(user['role'])
-    )
+    await message.answer("✅ تم تحديث بيانات السيارة بنجاح!", reply_markup=get_main_keyboard(user['role']))
     await state.clear()
 
 @dp.callback_query(F.data == "edit_neighborhoods")
 async def edit_neighborhoods_handler(callback: types.CallbackQuery, state: FSMContext):
-    """تعديل المناطق للكابتن"""
     user = get_user_by_id(callback.from_user.id)
     if user['role'] != 'captain':
-        await callback.answer("❌ هذه الخاصية للكباتن فقط", show_alert=True)
+        await callback.answer("❌ هذه الميزة للكباتن فقط", show_alert=True)
         return
     
     await callback.message.edit_text(
@@ -1273,91 +1275,116 @@ async def edit_neighborhoods_handler(callback: types.CallbackQuery, state: FSMCo
     await state.set_state(EditStates.change_neighborhood)
 
 @dp.callback_query(F.data.startswith("neigh_"), EditStates.change_neighborhood)
-async def handle_neighborhood_change_first(callback: types.CallbackQuery, state: FSMContext):
-    """معالج تغيير الحي الأول"""
-    neighborhood1 = callback.data.replace("neigh_", "")
-    await state.update_data(new_neighborhood1=neighborhood1)
-    
+async def handle_edit_first_neighborhood(callback: types.CallbackQuery, state: FSMContext):
+    neighborhood = callback.data.replace("neigh_", "")
     user = get_user_by_id(callback.from_user.id)
+    await state.update_data(new_neighborhood=neighborhood)
+    
     await callback.message.edit_text(
-        f"✅ الحي الأول: {neighborhood1}\n\n🏘️ اختر الحي الثاني:",
-        reply_markup=neighborhood_keyboard(user['city'], [neighborhood1])
+        f"✅ الحي الأول: {neighborhood}\n\n🏘️ اختر الحي الثاني:",
+        reply_markup=neighborhood_keyboard(user['city'], [neighborhood])
     )
-    await state.set_state(EditStates.change_neighborhood)
-    await state.update_data(step="second")
+    await state.set_state(RegisterStates.neighborhood2)
 
-# إضافة state جديد للتمييز بين خطوات تعديل المناطق
-class EditNeighborhoodStates(StatesGroup):
-    first = State()
-    second = State()  
-    third = State()
+@dp.callback_query(F.data == "edit_city")
+async def edit_city_handler(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("🌆 اختر مدينتك الجديدة:", reply_markup=city_keyboard())
+    await state.set_state(EditStates.change_city)
+
+@dp.callback_query(F.data.startswith("city_"), EditStates.change_city)
+async def handle_city_change(callback: types.CallbackQuery, state: FSMContext):
+    new_city = callback.data.split("_")[1]
+    user = get_user_by_id(callback.from_user.id)
+    
+    update_user_field(callback.from_user.id, "city", new_city)
+    
+    await callback.message.edit_text(f"✅ تم تغيير المدينة إلى: {new_city}\n\nالآن يجب تحديث الأحياء...")
+    await asyncio.sleep(1)
+    
+    if user['role'] == 'captain':
+        await callback.message.edit_text(
+            f"🏘️ اختر الحي الأول الجديد في {new_city}:",
+            reply_markup=neighborhood_keyboard(new_city)
+        )
+        await state.set_state(EditStates.change_neighborhood)
+    else:
+        await callback.message.edit_text(
+            f"🏘️ اختر حيك الجديد في {new_city}:",
+            reply_markup=neighborhood_keyboard(new_city)
+        )
+        await state.update_data(new_city=new_city)
+        await state.set_state(EditStates.change_neighborhood)
 
 @dp.callback_query(F.data.startswith("neigh_"), EditStates.change_neighborhood)
-async def handle_neighborhood_change_steps(callback: types.CallbackQuery, state: FSMContext):
-    """معالج خطوات تغيير المناطق"""
+async def handle_neighborhood_change_from_city(callback: types.CallbackQuery, state: FSMContext):
     neighborhood = callback.data.replace("neigh_", "")
-    data = await state.get_data()
-    step = data.get('step', 'first')
     user = get_user_by_id(callback.from_user.id)
+    data = await state.get_data()
     
-    if step == 'first' or 'new_neighborhood1' not in data:
-        # الحي الأول
-        await state.update_data(new_neighborhood1=neighborhood, step='second')
+    if user['role'] == 'client':
+        update_user_field(callback.from_user.id, "neighborhood", neighborhood)
+        await callback.message.edit_text("✅ تم تحديث بياناتك بنجاح!")
+        await asyncio.sleep(1)
+        await callback.message.delete()
+        await bot.send_message(
+            callback.from_user.id,
+            f"✅ تم تحديث منطقتك إلى: {user['city']} - {neighborhood}",
+            reply_markup=get_main_keyboard(user['role'])
+        )
+        await state.clear()
+    else:
+        await state.update_data(new_neighborhood=neighborhood)
         await callback.message.edit_text(
             f"✅ الحي الأول: {neighborhood}\n\n🏘️ اختر الحي الثاني:",
             reply_markup=neighborhood_keyboard(user['city'], [neighborhood])
         )
+        await state.set_state(RegisterStates.neighborhood2)
+
+@dp.callback_query(F.data == "change_role")
+async def change_role_handler(callback: types.CallbackQuery):
+    user = get_user_by_id(callback.from_user.id)
+    current_role = "عميل" if user['role'] == 'client' else "كابتن"
     
-    elif step == 'second':
-        # الحي الثاني
-        selected = [data['new_neighborhood1'], neighborhood]
-        await state.update_data(new_neighborhood2=neighborhood, step='third')
-        await callback.message.edit_text(
-            f"✅ الحي الثاني: {neighborhood}\n\n🏘️ اختر الحي الثالث:",
-            reply_markup=neighborhood_keyboard(user['city'], selected)
-        )
+    await callback.message.edit_text(
+        f"🔄 تغيير الدور\n\n"
+        f"دورك الحالي: {current_role}\n\n"
+        f"اختر الدور الجديد:",
+        reply_markup=role_change_keyboard()
+    )
+
+@dp.callback_query(F.data.startswith("change_to_"))
+async def handle_role_change(callback: types.CallbackQuery):
+    new_role = callback.data.split("_")[2]
+    user_id = callback.from_user.id
     
-    elif step == 'third':
-        # الحي الثالث - إنهاء التحديث
-        await state.update_data(new_neighborhood3=neighborhood)
-        data = await state.get_data()
-        
-        # تحديث جميع المناطق في قاعدة البيانات
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE users SET 
-                neighborhood=%s, 
-                neighborhood2=%s, 
-                neighborhood3=%s 
-            WHERE user_id=%s
-        """, (
-            data['new_neighborhood1'], 
-            data['new_neighborhood2'], 
-            neighborhood, 
-            callback.from_user.id
-        ))
-        conn.commit()
-        cur.close()
-        conn.close()
-        
-        await callback.message.edit_text(
-            f"✅ تم تحديث مناطق العمل بنجاح!\n\n"
-            f"المناطق الجديدة:\n"
-            f"• {data['new_neighborhood1']}\n"
-            f"• {data['new_neighborhood2']}\n"
-            f"• {neighborhood}"
-        )
-        
-        await asyncio.sleep(2)
-        
-        # العودة لقائمة التعديل
-        user = get_user_by_id(callback.from_user.id)
-        await callback.message.edit_text(
-            "⚙️ تعديل البيانات\n\nاختر البيان الذي تريد تعديله:",
-            reply_markup=edit_profile_keyboard(user['role'])
-        )
-        await state.clear()
+    update_user_field(user_id, "role", new_role)
+    
+    role_text = "عميل" if new_role == "client" else "كابتن"
+    await callback.message.edit_text(
+        f"✅ تم تغيير دورك إلى: {role_text}\n\n"
+        f"يمكنك الآن الاستفادة من جميع خصائص الـ{role_text}"
+    )
+    
+    await asyncio.sleep(2)
+    user = get_user_by_id(user_id)
+    await callback.message.delete()
+    await bot.send_message(
+        user_id,
+        f"🔄 تم تغيير دورك إلى {role_text}\n\nاستخدم الأزرار أدناه للتنقل:",
+        reply_markup=get_main_keyboard(new_role)
+    )
+
+# ================== معالجات الرسائل غير المعروفة ==================
+
+@dp.message()
+async def handle_unknown_message(message: types.Message):
+    user = get_user_by_id(message.from_user.id)
+    
+    if not user:
+        await message.answer("👋 مرحباً! يبدو أنك جديد هنا\nأرسل /start للتسجيل في النظام")
+    else:
+        help_text = "❓ لم أفهم طلبك\n\n💡 استخدم الأزرار أدناه للتنقل في النظام"
+        await message.answer(help_text, reply_markup=get_main_keyboard(user['role']))
 
 # ================== تشغيل البوت ==================
 if __name__ == "__main__":
@@ -1368,4 +1395,3 @@ if __name__ == "__main__":
         asyncio.run(dp.start_polling(bot))
     except Exception as e:
         print(f"❌ خطأ في التشغيل: {e}")
-
