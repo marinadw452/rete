@@ -303,7 +303,7 @@ class RatingStates(StatesGroup):
     rating_stars = State()
     rating_comment = State()
     rating_notes = State()
-    # ================== أزرار التحكم - مع الواجهة الثابتة ==================
+# ================== أزرار التحكم - مع الواجهة الثابتة ==================
 
 def get_main_keyboard(role):
     """لوحة المفاتيح الثابتة حسب نوع المستخدم"""
@@ -594,7 +594,8 @@ async def contact_us_text(message: types.Message):
 💡 يمكنك أيضاً إرسال استفسارك هنا وسنرد عليك قريباً
     """
     await message.answer(contact_info)
-    # ================== معالجات التسجيل ==================
+
+# ================== معالجات التسجيل ==================
 
 @dp.callback_query(F.data.startswith("role_"))
 async def handle_role_selection(callback: types.CallbackQuery, state: FSMContext):
@@ -1181,7 +1182,7 @@ async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
     role_text = "العميل" if user['role'] == 'client' else "الكابتن"
     status_text = ""
     
-   if user['role'] == 'captain':
+if user['role'] == 'captain':
         status_text = f"\n🟢 الحالة: {'متاح' if user['is_available'] else 'غير متاح'}"
     
     main_menu_text = f"""
