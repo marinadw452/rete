@@ -1182,7 +1182,7 @@ async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
     role_text = "العميل" if user['role'] == 'client' else "الكابتن"
     status_text = ""
     
-if user['role'] == 'captain':
+    if user['role'] == 'captain':
         status_text = f"\n🟢 الحالة: {'متاح' if user['is_available'] else 'غير متاح'}"
     
     main_menu_text = f"""
@@ -1200,6 +1200,7 @@ if user['role'] == 'captain':
         main_menu_text,
         reply_markup=get_main_keyboard(user['role'])
     )
+
 
 # ================== معالجات تعديل البيانات ==================
 
@@ -1394,3 +1395,4 @@ if __name__ == "__main__":
         asyncio.run(dp.start_polling(bot))
     except Exception as e:
         print(f"❌ خطأ في التشغيل: {e}")
+
