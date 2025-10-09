@@ -9,68 +9,45 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from config import BOT_TOKEN, PG_DB, PG_USER, PG_PASSWORD, PG_HOST, PG_PORT
 
-# ================== قاعدة البيانات ==================
 def get_conn():
     return psycopg2.connect(
-        dbname=PG_DB,
-        user=PG_USER,
-        password=PG_PASSWORD,
-        host=PG_HOST,
-        port=PG_PORT,
+        dbname=PG_DB, user=PG_USER, password=PG_PASSWORD,
+        host=PG_HOST, port=PG_PORT,
         cursor_factory=psycopg2.extras.RealDictCursor
     )
 
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
-
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
-        user_id BIGINT PRIMARY KEY,
-        username TEXT,
-        role VARCHAR(10) NOT NULL,
-        subscription VARCHAR(20),
-        full_name TEXT,
-        phone TEXT,
-        car_model TEXT,
-        car_plate TEXT,
-        agreement BOOLEAN DEFAULT FALSE,
-        city TEXT,
-        neighborhood TEXT,
-        neighborhood2 TEXT,
-        neighborhood3 TEXT,
-        is_available BOOLEAN DEFAULT TRUE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        user_id BIGINT PRIMARY KEY, username TEXT, role VARCHAR(10) NOT NULL,
+        subscription VARCHAR(20), full_name TEXT, phone TEXT,
+        car_model TEXT, car_plate TEXT, agreement BOOLEAN DEFAULT FALSE,
+        city TEXT, neighborhood TEXT, neighborhood2 TEXT, neighborhood3 TEXT,
+        is_available BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
-
     cur.execute("""
     CREATE TABLE IF NOT EXISTS matches (
-        id SERIAL PRIMARY KEY,
-        client_id BIGINT REFERENCES users(user_id),
-        captain_id BIGINT REFERENCES users(user_id),
-        destination TEXT,
+        id SERIAL PRIMARY KEY, client_id BIGINT REFERENCES users(user_id),
+        captain_id BIGINT REFERENCES users(user_id), destination TEXT,
         status VARCHAR(20) DEFAULT 'pending',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT unique_pending_match UNIQUE (client_id, captain_id)
     )
     """)
-
     cur.execute("""
     CREATE TABLE IF NOT EXISTS ratings (
-        id SERIAL PRIMARY KEY,
-        match_id INTEGER REFERENCES matches(id),
+        id SERIAL PRIMARY KEY, match_id INTEGER REFERENCES matches(id),
         client_id BIGINT REFERENCES users(user_id),
         captain_id BIGINT REFERENCES users(user_id),
         rating INTEGER CHECK (rating >= 1 AND rating <= 5),
-        comment TEXT,
-        notes TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        comment TEXT, notes TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(match_id, client_id)
     )
     """)
-
     conn.commit()
     cur.close()
     conn.close()
@@ -82,33 +59,14 @@ def save_user(user_id, username, data):
         INSERT INTO users (user_id, username, role, subscription, full_name, phone, car_model, car_plate, agreement, city, neighborhood, neighborhood2, neighborhood3, is_available)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE)
         ON CONFLICT (user_id) DO UPDATE SET
-            username=EXCLUDED.username,
-            role=EXCLUDED.role,
-            subscription=EXCLUDED.subscription,
-            full_name=EXCLUDED.full_name,
-            phone=EXCLUDED.phone,
-            car_model=EXCLUDED.car_model,
-            car_plate=EXCLUDED.car_plate,
-            agreement=EXCLUDED.agreement,
-            city=EXCLUDED.city,
-            neighborhood=EXCLUDED.neighborhood,
-            neighborhood2=EXCLUDED.neighborhood2,
-            neighborhood3=EXCLUDED.neighborhood3,
-            is_available=TRUE
-    """, (
-        user_id, username,
-        data.get("role"),
-        data.get("subscription"),
-        data.get("full_name"),
-        data.get("phone"),
-        data.get("car_model"),
-        data.get("car_plate"),
-        data.get("agreement"),
-        data.get("city"),
-        data.get("neighborhood"),
-        data.get("neighborhood2"),
-        data.get("neighborhood3"),
-    ))
+            username=EXCLUDED.username, role=EXCLUDED.role, subscription=EXCLUDED.subscription,
+            full_name=EXCLUDED.full_name, phone=EXCLUDED.phone, car_model=EXCLUDED.car_model,
+            car_plate=EXCLUDED.car_plate, agreement=EXCLUDED.agreement, city=EXCLUDED.city,
+            neighborhood=EXCLUDED.neighborhood, neighborhood2=EXCLUDED.neighborhood2,
+            neighborhood3=EXCLUDED.neighborhood3, is_available=TRUE
+    """, (user_id, username, data.get("role"), data.get("subscription"), data.get("full_name"),
+          data.get("phone"), data.get("car_model"), data.get("car_plate"), data.get("agreement"),
+          data.get("city"), data.get("neighborhood"), data.get("neighborhood2"), data.get("neighborhood3")))
     conn.commit()
     cur.close()
     conn.close()
@@ -117,8 +75,7 @@ def find_available_captains(city, neighborhood):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT * FROM users 
-        WHERE role='captain' AND is_available=TRUE AND city=%s 
+        SELECT * FROM users WHERE role='captain' AND is_available=TRUE AND city=%s 
         AND (%s = neighborhood OR %s = neighborhood2 OR %s = neighborhood3)
         ORDER BY created_at ASC
     """, (city, neighborhood, neighborhood, neighborhood))
@@ -140,11 +97,7 @@ def create_match_request(client_id, captain_id, destination):
     conn = get_conn()
     cur = conn.cursor()
     try:
-        cur.execute("""
-            INSERT INTO matches (client_id, captain_id, destination, status)
-            VALUES (%s, %s, %s, 'pending')
-            RETURNING id
-        """, (client_id, captain_id, destination))
+        cur.execute("INSERT INTO matches (client_id, captain_id, destination, status) VALUES (%s, %s, %s, 'pending') RETURNING id", (client_id, captain_id, destination))
         match_id = cur.fetchone()['id']
         conn.commit()
         return match_id
@@ -158,21 +111,12 @@ def create_match_request(client_id, captain_id, destination):
 def update_match_status(client_id, captain_id, status):
     conn = get_conn()
     cur = conn.cursor()
-    
-    cur.execute("""
-        UPDATE matches 
-        SET status=%s, updated_at=CURRENT_TIMESTAMP
-        WHERE client_id=%s AND captain_id=%s AND status != 'completed'
-        RETURNING id
-    """, (status, client_id, captain_id))
-    
+    cur.execute("UPDATE matches SET status=%s, updated_at=CURRENT_TIMESTAMP WHERE client_id=%s AND captain_id=%s AND status != 'completed' RETURNING id", (status, client_id, captain_id))
     result = cur.fetchone()
-    
     if status == "in_progress":
         cur.execute("UPDATE users SET is_available=FALSE WHERE user_id=%s", (captain_id,))
     elif status in ["rejected", "cancelled", "completed"]:
         cur.execute("UPDATE users SET is_available=TRUE WHERE user_id=%s", (captain_id,))
-
     conn.commit()
     match_id = result['id'] if result else None
     cur.close()
@@ -182,11 +126,7 @@ def update_match_status(client_id, captain_id, status):
 def get_match_details(client_id, captain_id):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
-        SELECT * FROM matches 
-        WHERE client_id=%s AND captain_id=%s 
-        ORDER BY created_at DESC LIMIT 1
-    """, (client_id, captain_id))
+    cur.execute("SELECT * FROM matches WHERE client_id=%s AND captain_id=%s ORDER BY created_at DESC LIMIT 1", (client_id, captain_id))
     match = cur.fetchone()
     cur.close()
     conn.close()
@@ -200,24 +140,19 @@ def save_rating(match_id, client_id, captain_id, rating, comment, notes):
             INSERT INTO ratings (match_id, client_id, captain_id, rating, comment, notes)
             VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (match_id, client_id) DO UPDATE SET
-                rating = EXCLUDED.rating,
-                comment = EXCLUDED.comment,
-                notes = EXCLUDED.notes,
-                created_at = CURRENT_TIMESTAMP
+                rating = EXCLUDED.rating, comment = EXCLUDED.comment, notes = EXCLUDED.notes, created_at = CURRENT_TIMESTAMP
         """, (match_id, client_id, captain_id, rating, comment or "", notes or ""))
         conn.commit()
         return True
     except Exception as e:
         conn.rollback()
-        print(f"خطأ في حفظ التقييم: {e}")
         return False
     finally:
         cur.close()
         conn.close()
 
 def is_user_registered(user_id):
-    user = get_user_by_id(user_id)
-    return user is not None
+    return get_user_by_id(user_id) is not None
 
 def update_user_field(user_id, field, value):
     conn = get_conn()
@@ -230,31 +165,13 @@ def update_user_field(user_id, field, value):
 def get_user_stats(user_id):
     conn = get_conn()
     cur = conn.cursor()
-    
     user = get_user_by_id(user_id)
     if not user:
         return None
-    
     if user['role'] == 'client':
-        cur.execute("""
-            SELECT 
-                COUNT(*) as total_requests,
-                COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_trips,
-                COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_requests
-            FROM matches WHERE client_id = %s
-        """, (user_id,))
+        cur.execute("SELECT COUNT(*) as total_requests, COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_trips, COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_requests FROM matches WHERE client_id = %s", (user_id,))
     else:
-        cur.execute("""
-            SELECT 
-                COUNT(*) as total_requests,
-                COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_trips,
-                COUNT(CASE WHEN status = 'in_progress' THEN 1 END) as active_trips,
-                COALESCE(AVG(r.rating), 0) as avg_rating
-            FROM matches m
-            LEFT JOIN ratings r ON m.id = r.match_id
-            WHERE m.captain_id = %s
-        """, (user_id,))
-    
+        cur.execute("SELECT COUNT(*) as total_requests, COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_trips, COUNT(CASE WHEN status = 'in_progress' THEN 1 END) as active_trips, COALESCE(AVG(r.rating), 0) as avg_rating FROM matches m LEFT JOIN ratings r ON m.id = r.match_id WHERE m.captain_id = %s", (user_id,))
     stats = cur.fetchone()
     cur.close()
     conn.close()
@@ -262,7 +179,6 @@ def get_user_stats(user_id):
 
 rating_temp_data = {}
 
-# ================== حالات FSM ==================
 class RegisterStates(StatesGroup):
     role = State()
     subscription = State()
@@ -278,7 +194,7 @@ class RegisterStates(StatesGroup):
 
 class RequestStates(StatesGroup):
     enter_destination = State()
-    
+
 class EditStates(StatesGroup):
     edit_name = State()
     edit_phone = State()
@@ -293,11 +209,8 @@ class RatingStates(StatesGroup):
     rating_comment = State()
     rating_notes = State()
 
-# ================== أزرار التحكم ==================
-
 def get_main_keyboard(role):
     keyboard = ReplyKeyboardBuilder()
-    
     if role == "client":
         keyboard.button(text="🚕 طلب توصيلة")
         keyboard.button(text="📊 إحصائياتي")
@@ -309,7 +222,6 @@ def get_main_keyboard(role):
         keyboard.button(text="📊 إحصائياتي")
         keyboard.button(text="⚙️ تعديل البيانات")
         keyboard.button(text="📞 اتصل بنا")
-    
     keyboard.adjust(2, 2, 1)
     return keyboard.as_markup(resize_keyboard=True)
 
@@ -343,16 +255,13 @@ def neighborhood_keyboard(city, selected_neighborhoods=None):
     try:
         with open("neighborhoods.json", "r", encoding="utf-8") as f:
             neighborhoods_data = json.load(f)
-            
         builder = InlineKeyboardBuilder()
         selected = selected_neighborhoods or []
-        
         for neighborhood in neighborhoods_data.get(city, []):
             if neighborhood not in selected:
                 builder.button(text=neighborhood, callback_data=f"neigh_{neighborhood}")
         builder.adjust(2)
         return builder.as_markup()
-        
     except FileNotFoundError:
         builder = InlineKeyboardBuilder()
         builder.button(text="❌ ملف الأحياء غير موجود", callback_data="error_no_file")
@@ -385,11 +294,9 @@ def edit_profile_keyboard(role):
     builder = InlineKeyboardBuilder()
     builder.button(text="👤 تعديل الاسم", callback_data="edit_name")
     builder.button(text="📱 تعديل الجوال", callback_data="edit_phone")
-    
     if role == "captain":
         builder.button(text="🚘 تعديل السيارة", callback_data="edit_car")
         builder.button(text="📍 تعديل المناطق", callback_data="edit_neighborhoods")
-    
     builder.button(text="🌆 تغيير المدينة", callback_data="edit_city")
     builder.button(text="🔄 تغيير الدور", callback_data="change_role")
     builder.button(text="🔙 العودة للقائمة", callback_data="back_to_main")
@@ -418,43 +325,20 @@ def role_change_keyboard():
     builder.adjust(1)
     return builder.as_markup()
 
-# ================== إعداد البوت ==================
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-
-# ================== معالجات الأحداث الرئيسية ==================
 
 @dp.message(F.text == "/start")
 async def start_command(message: types.Message, state: FSMContext):
     await state.clear()
     user_id = message.from_user.id
-    
     if is_user_registered(user_id):
         user = get_user_by_id(user_id)
         role_text = "العميل" if user['role'] == 'client' else "الكابتن"
-        
-        welcome_back = f"""
-🎉 أهلاً وسهلاً {user['full_name']}!
-
-أنت مسجل كـ {role_text} في منطقة:
-📍 {user['city']}
-
-استخدم الأزرار أدناه للتنقل:
-        """
-        
-        await message.answer(welcome_back, reply_markup=get_main_keyboard(user['role']))
+        await message.answer(f"🎉 أهلاً وسهلاً {user['full_name']}!\n\nأنت مسجل كـ {role_text} في منطقة:\n📍 {user['city']}\n\nاستخدم الأزرار أدناه للتنقل:", reply_markup=get_main_keyboard(user['role']))
     else:
-        welcome_text = """
-🌟 مرحباً بك في نظام دربك للمواصلات 🌟
-
-اختر دورك في النظام:
-🚕 العميل: يطلب توصيلة
-🧑‍✈️ الكابتن: يقدم خدمة التوصيل
-        """
-        await message.answer(welcome_text, reply_markup=start_keyboard())
+        await message.answer("🌟 مرحباً بك في نظام دربك للمواصلات 🌟\n\nاختر دورك في النظام:\n🚕 العميل: يطلب توصيلة\n🧑‍✈️ الكابتن: يقدم خدمة التوصيل", reply_markup=start_keyboard())
         await state.set_state(RegisterStates.role)
-
-# ================== معالجات الأزرار الثابتة ==================
 
 @dp.message(F.text == "🚕 طلب توصيلة")
 async def request_ride_text(message: types.Message, state: FSMContext):
@@ -462,11 +346,7 @@ async def request_ride_text(message: types.Message, state: FSMContext):
     if not user:
         await message.answer("❌ يجب التسجيل أولاً. أرسل /start")
         return
-    
-    await message.answer(
-        f"📍 موقعك الحالي: {user['city']} - {user['neighborhood']}\n\n"
-        f"🎯 اكتب اسم المنطقة أو المكان الذي تريد الذهاب إليه:"
-    )
+    await message.answer(f"📍 موقعك الحالي: {user['city']} - {user['neighborhood']}\n\n🎯 اكتب اسم المنطقة أو المكان الذي تريد الذهاب إليه:")
     await state.set_state(RequestStates.enter_destination)
 
 @dp.message(F.text == "🟢 متاح للعمل")
@@ -475,12 +355,8 @@ async def set_available_text(message: types.Message):
     if not user:
         await message.answer("❌ يجب التسجيل أولاً. أرسل /start")
         return
-        
     update_user_field(message.from_user.id, "is_available", True)
-    await message.answer(
-        "🟢 تم تعيينك كمتاح للتوصيل!\n\n"
-        "سيتم إشعارك عند وصول طلبات جديدة..."
-    )
+    await message.answer("🟢 تم تعيينك كمتاح للتوصيل!\n\nسيتم إشعارك عند وصول طلبات جديدة...")
 
 @dp.message(F.text == "🔴 غير متاح")
 async def set_unavailable_text(message: types.Message):
@@ -488,12 +364,8 @@ async def set_unavailable_text(message: types.Message):
     if not user:
         await message.answer("❌ يجب التسجيل أولاً. أرسل /start")
         return
-        
     update_user_field(message.from_user.id, "is_available", False)
-    await message.answer(
-        "🔴 تم تعيينك كغير متاح للتوصيل\n\n"
-        "لن تصلك طلبات جديدة حتى تقوم بتفعيل الحالة مرة أخرى"
-    )
+    await message.answer("🔴 تم تعيينك كغير متاح للتوصيل\n\nلن تصلك طلبات جديدة حتى تقوم بتفعيل الحالة مرة أخرى")
 
 @dp.message(F.text == "📊 إحصائياتي")
 async def show_stats_text(message: types.Message):
@@ -501,30 +373,12 @@ async def show_stats_text(message: types.Message):
     if not user:
         await message.answer("❌ يجب التسجيل أولاً. أرسل /start")
         return
-    
     stats = get_user_stats(message.from_user.id)
-    
     if user['role'] == 'client':
-        stats_text = f"""
-📊 إحصائياتك كعميل:
-
-🔢 إجمالي الطلبات: {stats['total_requests']}
-✅ الرحلات المكتملة: {stats['completed_trips']}
-⏳ الطلبات المعلقة: {stats['pending_requests']}
-        """
+        await message.answer(f"📊 إحصائياتك كعميل:\n\n🔢 إجمالي الطلبات: {stats['total_requests']}\n✅ الرحلات المكتملة: {stats['completed_trips']}\n⏳ الطلبات المعلقة: {stats['pending_requests']}")
     else:
         avg_rating = round(float(stats['avg_rating']), 1) if stats['avg_rating'] else 0
-        stats_text = f"""
-📊 إحصائياتك ككابتن:
-
-🔢 إجمالي الطلبات: {stats['total_requests']}
-✅ الرحلات المكتملة: {stats['completed_trips']}
-🚗 الرحلات النشطة: {stats['active_trips']}
-⭐ متوسط التقييم: {avg_rating}/5
-🔄 حالتك: {"متاح" if user['is_available'] else "غير متاح"}
-        """
-    
-    await message.answer(stats_text)
+        await message.answer(f"📊 إحصائياتك ككابتن:\n\n🔢 إجمالي الطلبات: {stats['total_requests']}\n✅ الرحلات المكتملة: {stats['completed_trips']}\n🚗 الرحلات النشطة: {stats['active_trips']}\n⭐ متوسط التقييم: {avg_rating}/5\n🔄 حالتك: {'متاح' if user['is_available'] else 'غير متاح'}")
 
 @dp.message(F.text == "⚙️ تعديل البيانات")
 async def edit_profile_text(message: types.Message):
@@ -532,56 +386,24 @@ async def edit_profile_text(message: types.Message):
     if not user:
         await message.answer("❌ يجب التسجيل أولاً. أرسل /start")
         return
-    
-    profile_info = f"""
-👤 بياناتك الحالية:
-
-📛 الاسم: {user['full_name']}
-📱 الجوال: {user['phone']}
-📍 المدينة: {user['city']}
-    """
-    
+    profile_info = f"👤 بياناتك الحالية:\n\n📛 الاسم: {user['full_name']}\n📱 الجوال: {user['phone']}\n📍 المدينة: {user['city']}\n"
     if user['role'] == 'captain':
-        profile_info += f"""
-🚘 السيارة: {user['car_model']}
-🔢 اللوحة: {user['car_plate']}
-📍 مناطق العمل:
-- {user['neighborhood']}
-- {user['neighborhood2']}  
-- {user['neighborhood3']}
-        """
+        profile_info += f"🚘 السيارة: {user['car_model']}\n🔢 اللوحة: {user['car_plate']}\n📍 مناطق العمل:\n- {user['neighborhood']}\n- {user['neighborhood2']}\n- {user['neighborhood3']}\n"
     else:
         profile_info += f"🏘️ الحي: {user['neighborhood']}"
-    
     profile_info += "\n\nاختر البيان الذي تريد تعديله:"
-    
     await message.answer(profile_info, reply_markup=edit_profile_keyboard(user['role']))
 
 @dp.message(F.text == "📞 اتصل بنا")
 async def contact_us_text(message: types.Message):
-    contact_info = """
-📞 للتواصل والاستفسارات:
-
-📱 الجوال: 0501234567
-📧 البريد: support@darbak.com
-⏰ ساعات العمل: 24/7
-
-💡 يمكنك أيضاً إرسال استفسارك هنا وسنرد عليك قريباً
-    """
-    await message.answer(contact_info)
-
-# ================== معالجات التسجيل ==================
+    await message.answer("📞 للتواصل والاستفسارات:\n\n📱 الجوال: 0501234567\n📧 البريد: support@darbak.com\n⏰ ساعات العمل: 24/7\n\n💡 يمكنك أيضاً إرسال استفسارك هنا وسنرد عليك قريباً")
 
 @dp.callback_query(F.data.startswith("role_"))
 async def handle_role_selection(callback: types.CallbackQuery, state: FSMContext):
     role = callback.data.split("_")[1]
     await state.update_data(role=role)
-    
     role_text = "عميل" if role == "client" else "كابتن"
-    await callback.message.edit_text(
-        f"✅ اخترت دور: {role_text}\n\nاختر نوع الاشتراك:",
-        reply_markup=subscription_keyboard()
-    )
+    await callback.message.edit_text(f"✅ اخترت دور: {role_text}\n\nاختر نوع الاشتراك:", reply_markup=subscription_keyboard())
     await state.set_state(RegisterStates.subscription)
     await callback.answer()
 
@@ -589,7 +411,6 @@ async def handle_role_selection(callback: types.CallbackQuery, state: FSMContext
 async def handle_subscription(callback: types.CallbackQuery, state: FSMContext):
     subscription = callback.data.split("_")[1]
     await state.update_data(subscription=subscription)
-    
     sub_text = "يومي" if subscription == "daily" else "شهري"
     await callback.message.edit_text(f"✅ نوع الاشتراك: {sub_text}")
     await callback.message.answer("👤 أدخل اسمك الكامل:")
@@ -606,20 +427,11 @@ async def handle_full_name(message: types.Message, state: FSMContext):
 async def handle_phone(message: types.Message, state: FSMContext):
     await state.update_data(phone=message.text)
     data = await state.get_data()
-    
     if data.get("role") == "captain":
         await message.answer("🚘 أدخل موديل السيارة (مثال: كامري 2020):")
         await state.set_state(RegisterStates.car_model)
     else:
-        await message.answer(
-            "📋 الشروط والأحكام:\n"
-            "• الالتزام بأنظمة المرور والسلامة\n"
-            "• احترام الآخرين والتعامل بأدب\n"
-            "• عدم إلحاق الضرر بالممتلكات\n"
-            "• الالتزام بالمواعيد المحددة\n\n"
-            "اضغط للموافقة والمتابعة:",
-            reply_markup=agreement_keyboard()
-        )
+        await message.answer("📋 الشروط والأحكام:\n• الالتزام بأنظمة المرور والسلامة\n• احترام الآخرين والتعامل بأدب\n• عدم إلحاق الضرر بالممتلكات\n• الالتزام بالمواعيد المحددة\n\nاضغط للموافقة والمتابعة:", reply_markup=agreement_keyboard())
         await state.set_state(RegisterStates.agreement)
 
 @dp.message(RegisterStates.car_model)
@@ -631,25 +443,13 @@ async def handle_car_model(message: types.Message, state: FSMContext):
 @dp.message(RegisterStates.car_plate)
 async def handle_car_plate(message: types.Message, state: FSMContext):
     await state.update_data(car_plate=message.text)
-    await message.answer(
-        "📋 الشروط والأحكام للكباتن:\n"
-        "• وجود رخصة قيادة سارية\n"
-        "• تأمين ساري للمركبة\n"
-        "• الالتزام بأنظمة المرور\n"
-        "• التعامل باحترام مع العملاء\n"
-        "• المحافظة على نظافة المركبة\n\n"
-        "اضغط للموافقة والمتابعة:",
-        reply_markup=agreement_keyboard()
-    )
+    await message.answer("📋 الشروط والأحكام للكباتن:\n• وجود رخصة قيادة سارية\n• تأمين ساري للمركبة\n• الالتزام بأنظمة المرور\n• التعامل باحترام مع العملاء\n• المحافظة على نظافة المركبة\n\nاضغط للموافقة والمتابعة:", reply_markup=agreement_keyboard())
     await state.set_state(RegisterStates.agreement)
 
 @dp.callback_query(F.data == "agree")
 async def handle_agreement(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(agreement=True)
-    await callback.message.edit_text(
-        "✅ تمت الموافقة على الشروط\n\n🌆 اختر مدينتك:",
-        reply_markup=city_keyboard()
-    )
+    await callback.message.edit_text("✅ تمت الموافقة على الشروط\n\n🌆 اختر مدينتك:", reply_markup=city_keyboard())
     await state.set_state(RegisterStates.city)
     await callback.answer()
 
@@ -657,36 +457,25 @@ async def handle_agreement(callback: types.CallbackQuery, state: FSMContext):
 async def handle_city_selection(callback: types.CallbackQuery, state: FSMContext):
     city = callback.data.split("_")[1]
     await state.update_data(city=city)
-    
     data = await state.get_data()
     current_state = await state.get_state()
-    
     if current_state == EditStates.change_city.state:
         user = get_user_by_id(callback.from_user.id)
         update_user_field(callback.from_user.id, "city", city)
-        
         await callback.message.edit_text(f"✅ تم تغيير المدينة إلى: {city}\n\nالآن يجب تحديث الأحياء...")
         await asyncio.sleep(1)
-        
         if user['role'] == 'captain':
-            await callback.message.edit_text(
-                f"🏘️ اختر الحي الأول الجديد في {city}:",
-                reply_markup=neighborhood_keyboard(city)
-            )
+            await callback.message.edit_text(f"🏘️ اختر الحي الأول الجديد في {city}:", reply_markup=neighborhood_keyboard(city))
+            await state.set_state(EditStates.change_neighborhood)
+        else:
+            await callback.message.edit_text(f"🏘️ اختر حيك الجديد في {city}:", reply_markup=neighborhood_keyboard(city))
             await state.set_state(EditStates.change_neighborhood)
         await callback.answer()
         return
-    
     if data.get("role") == "captain":
-        await callback.message.edit_text(
-            f"✅ المدينة: {city}\n\n🏘️ اختر الحي الأول الذي تعمل به:",
-            reply_markup=neighborhood_keyboard(city)
-        )
+        await callback.message.edit_text(f"✅ المدينة: {city}\n\n🏘️ اختر الحي الأول الذي تعمل به:", reply_markup=neighborhood_keyboard(city))
     else:
-        await callback.message.edit_text(
-            f"✅ المدينة: {city}\n\n🏘️ اختر حيك:",
-            reply_markup=neighborhood_keyboard(city)
-        )
+        await callback.message.edit_text(f"✅ المدينة: {city}\n\n🏘️ اختر حيك:", reply_markup=neighborhood_keyboard(city))
     await state.set_state(RegisterStates.neighborhood)
     await callback.answer()
 
@@ -695,27 +484,16 @@ async def handle_first_neighborhood_selection(callback: types.CallbackQuery, sta
     neighborhood = callback.data.replace("neigh_", "")
     await state.update_data(neighborhood=neighborhood)
     data = await state.get_data()
-    
     if data.get("role") == "captain":
-        await callback.message.edit_text(
-            f"✅ الحي الأول: {neighborhood}\n\n🏘️ اختر الحي الثاني:",
-            reply_markup=neighborhood_keyboard(data['city'], [neighborhood])
-        )
+        await callback.message.edit_text(f"✅ الحي الأول: {neighborhood}\n\n🏘️ اختر الحي الثاني:", reply_markup=neighborhood_keyboard(data['city'], [neighborhood]))
         await state.set_state(RegisterStates.neighborhood2)
     else:
         username = callback.from_user.username
         save_user(callback.from_user.id, username, data)
-        
         await callback.message.edit_text("✅ تم قبولك بنجاح! مرحباً بك في نظام دربك")
         await asyncio.sleep(2)
         await callback.message.delete()
-        await bot.send_message(
-            callback.from_user.id,
-            f"🎉 مرحباً {data['full_name']}\n\n"
-            f"📍 منطقتك: {data['city']} - {neighborhood}\n\n"
-            "استخدم الأزرار أدناه للتنقل:",
-            reply_markup=get_main_keyboard("client")
-        )
+        await bot.send_message(callback.from_user.id, f"🎉 مرحباً {data['full_name']}\n\n📍 منطقتك: {data['city']} - {neighborhood}\n\nاستخدم الأزرار أدناه للتنقل:", reply_markup=get_main_keyboard("client"))
         await state.clear()
     await callback.answer()
 
@@ -724,25 +502,16 @@ async def handle_second_neighborhood_selection(callback: types.CallbackQuery, st
     neighborhood2 = callback.data.replace("neigh_", "")
     await state.update_data(neighborhood2=neighborhood2)
     data = await state.get_data()
-    
     if 'new_neighborhood' in data:
         await state.update_data(new_neighborhood2=neighborhood2)
         user = get_user_by_id(callback.from_user.id)
         selected = [data['new_neighborhood'], neighborhood2]
-        
-        await callback.message.edit_text(
-            f"✅ الحي الثاني: {neighborhood2}\n\n🏘️ اختر الحي الثالث:",
-            reply_markup=neighborhood_keyboard(user['city'], selected)
-        )
+        await callback.message.edit_text(f"✅ الحي الثاني: {neighborhood2}\n\n🏘️ اختر الحي الثالث:", reply_markup=neighborhood_keyboard(user['city'], selected))
         await state.set_state(RegisterStates.neighborhood3)
         await callback.answer()
         return
-    
     selected = [data['neighborhood'], neighborhood2]
-    await callback.message.edit_text(
-        f"✅ الحي الثاني: {neighborhood2}\n\n🏘️ اختر الحي الثالث:",
-        reply_markup=neighborhood_keyboard(data['city'], selected)
-    )
+    await callback.message.edit_text(f"✅ الحي الثاني: {neighborhood2}\n\n🏘️ اختر الحي الثالث:", reply_markup=neighborhood_keyboard(data['city'], selected))
     await state.set_state(RegisterStates.neighborhood3)
     await callback.answer()
 
@@ -751,131 +520,65 @@ async def handle_third_neighborhood_selection(callback: types.CallbackQuery, sta
     neighborhood3 = callback.data.replace("neigh_", "")
     await state.update_data(neighborhood3=neighborhood3)
     data = await state.get_data()
-    
     if 'new_neighborhood' in data:
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
-            UPDATE users SET neighborhood=%s, neighborhood2=%s, neighborhood3=%s 
-            WHERE user_id=%s
-        """, (data['new_neighborhood'], data['new_neighborhood2'], neighborhood3, callback.from_user.id))
+        cur.execute("UPDATE users SET neighborhood=%s, neighborhood2=%s, neighborhood3=%s WHERE user_id=%s", (data['new_neighborhood'], data['new_neighborhood2'], neighborhood3, callback.from_user.id))
         conn.commit()
         cur.close()
         conn.close()
-        
         user = get_user_by_id(callback.from_user.id)
-        await callback.message.edit_text(
-            f"✅ تم تحديث مناطق العمل بنجاح!\n\n"
-            f"📍 مناطقك الجديدة:\n"
-            f"• {data['new_neighborhood']}\n"
-            f"• {data['new_neighborhood2']}\n"
-            f"• {neighborhood3}"
-        )
+        await callback.message.edit_text(f"✅ تم تحديث مناطق العمل بنجاح!\n\n📍 مناطقك الجديدة:\n• {data['new_neighborhood']}\n• {data['new_neighborhood2']}\n• {neighborhood3}")
         await asyncio.sleep(2)
         await callback.message.delete()
-        await bot.send_message(
-            callback.from_user.id,
-            "✅ تم التحديث بنجاح",
-            reply_markup=get_main_keyboard(user['role'])
-        )
+        await bot.send_message(callback.from_user.id, "✅ تم التحديث بنجاح", reply_markup=get_main_keyboard(user['role']))
         await state.clear()
         await callback.answer()
         return
-    
     username = callback.from_user.username
     save_user(callback.from_user.id, username, data)
-    
     await callback.message.edit_text("✅ تم قبولك بنجاح! مرحباً بك في نظام دربك")
     await asyncio.sleep(2)
     await callback.message.delete()
-    await bot.send_message(
-        callback.from_user.id,
-        f"🎉 مرحباً الكابتن {data['full_name']}\n\n"
-        f"🚘 مركبتك: {data['car_model']} ({data['car_plate']})\n"
-        f"📍 مناطق عملك:\n"
-        f"• {data['neighborhood']}\n"
-        f"• {data['neighborhood2']}\n"
-        f"• {neighborhood3}\n\n"
-        "استخدم الأزرار أدناه للتنقل:",
-        reply_markup=get_main_keyboard("captain")
-    )
+    await bot.send_message(callback.from_user.id, f"🎉 مرحباً الكابتن {data['full_name']}\n\n🚘 مركبتك: {data['car_model']} ({data['car_plate']})\n📍 مناطق عملك:\n• {data['neighborhood']}\n• {data['neighborhood2']}\n• {neighborhood3}\n\nاستخدم الأزرار أدناه للتنقل:", reply_markup=get_main_keyboard("captain"))
     await state.clear()
     await callback.answer()
-
-# ================== معالجات طلب التوصيل ==================
 
 @dp.message(RequestStates.enter_destination)
 async def handle_destination_input(message: types.Message, state: FSMContext):
     destination = message.text.strip()
     user = get_user_by_id(message.from_user.id)
-    
     await state.update_data(destination=destination)
-    
-    await message.answer(
-        f"🎯 الوجهة: {destination}\n\n"
-        f"🔍 جاري البحث عن الكباتن المتاحين في منطقتك..."
-    )
-    
+    await message.answer(f"🎯 الوجهة: {destination}\n\n🔍 جاري البحث عن الكباتن المتاحين في منطقتك...")
     await search_for_captains(message, state, user['city'], user['neighborhood'], destination)
 
 async def search_for_captains(message, state, city, neighborhood, destination):
     captains = find_available_captains(city, neighborhood)
-    
     if not captains:
-        await message.answer(
-            "😔 عذراً، لا يوجد كباتن متاحين في منطقتك حالياً.\n\n"
-            "💡 نصائح:\n"
-            "• جرب مرة أخرى بعد قليل\n"
-            "• تأكد من اختيار الحي الصحيح\n"
-            "• يمكنك تجربة طلب توصيلة مرة أخرى"
-        )
+        await message.answer("😔 عذراً، لا يوجد كباتن متاحين في منطقتك حالياً.\n\n💡 نصائح:\n• جرب مرة أخرى بعد قليل\n• تأكد من اختيار الحي الصحيح\n• يمكنك تجربة طلب توصيلة مرة أخرى")
         await state.clear()
         return
-
     await message.answer(f"🎉 وُجد {len(captains)} كابتن متاح في منطقتك!")
-    
     for captain in captains:
-        captain_info = (
-            f"👨‍✈️ الكابتن: {captain['full_name']}\n"
-            f"🚘 السيارة: {captain['car_model']}\n"
-            f"🔢 اللوحة: {captain['car_plate']}\n"
-            f"📍 مناطق العمل:\n"
-            f"• {captain['neighborhood']}\n"
-            f"• {captain['neighborhood2']}\n"
-            f"• {captain['neighborhood3']}"
-        )
-        
+        captain_info = f"👨‍✈️ الكابتن: {captain['full_name']}\n🚘 السيارة: {captain['car_model']}\n🔢 اللوحة: {captain['car_plate']}\n📍 مناطق العمل:\n• {captain['neighborhood']}\n• {captain['neighborhood2']}\n• {captain['neighborhood3']}"
         await message.answer(captain_info, reply_markup=captain_selection_keyboard(captain["user_id"]))
 
 @dp.callback_query(F.data.startswith("choose_"))
 async def handle_captain_selection(callback: types.CallbackQuery, state: FSMContext):
     captain_id = int(callback.data.split("_")[1])
     client_id = callback.from_user.id
-    
     data = await state.get_data()
     destination = data.get('destination', 'غير محدد')
-
     match_id = create_match_request(client_id, captain_id, destination)
     if not match_id:
         await callback.answer("⚠️ لديك طلب مُعلق مع هذا الكابتن", show_alert=True)
         return
-
     client = get_user_by_id(client_id)
     captain = get_user_by_id(captain_id)
-
     if not client or not captain:
         await callback.answer("❌ خطأ في البيانات", show_alert=True)
         return
-
-    notification_text = (
-        f"🚖 طلب رحلة جديد!\n\n"
-        f"👤 العميل: {client['full_name']}\n"
-        f"📱 الجوال: {client['phone']}\n"
-        f"📍 من: {client['city']} - {client['neighborhood']}\n"
-        f"🎯 إلى: {destination}\n\n"
-        f"هل توافق على هذا الطلب؟"
-    )
-
+    notification_text = f"🚖 طلب رحلة جديد!\n\n👤 العميل: {client['full_name']}\n📱 الجوال: {client['phone']}\n📍 من: {client['city']} - {client['neighborhood']}\n🎯 إلى: {destination}\n\nهل توافق على هذا الطلب؟"
     await bot.send_message(captain_id, notification_text, reply_markup=captain_response_keyboard(client_id))
     await callback.message.edit_text("⏳ تم إرسال طلبك للكابتن، يرجى انتظار الرد...")
     await state.clear()
@@ -885,37 +588,13 @@ async def handle_captain_selection(callback: types.CallbackQuery, state: FSMCont
 async def handle_captain_acceptance(callback: types.CallbackQuery):
     client_id = int(callback.data.split("_")[2])
     captain_id = callback.from_user.id
-
     match_id = update_match_status(client_id, captain_id, "in_progress")
     match = get_match_details(client_id, captain_id)
     captain = get_user_by_id(captain_id)
     client = get_user_by_id(client_id)
-
-    await callback.message.edit_text(
-        f"✅ تم قبول الطلب! 🎉\n\n"
-        f"👤 العميل: {client['full_name']}\n"
-        f"📱 جواله: {client['phone']}\n"
-        f"🎯 الوجهة: {match['destination']}\n\n"
-        f"تواصل مع العميل وابدأ الرحلة",
-        reply_markup=contact_keyboard(client.get('username'), "💬 تواصل مع العميل")
-    )
-
-    await bot.send_message(
-        captain_id,
-        "🚗 الرحلة جارية...\n"
-        "اضغط الزر أدناه عند الوصول للوجهة:",
-        reply_markup=trip_control_keyboard(captain_id, client_id)
-    )
-
-    client_notification = (
-        f"🎉 الكابتن وافق على طلبك!\n\n"
-        f"👨‍✈️ الكابتن: {captain['full_name']}\n"
-        f"📱 جواله: {captain['phone']}\n"
-        f"🚘 السيارة: {captain['car_model']} ({captain['car_plate']})\n\n"
-        f"🚗 الكابتن في طريقه إليك\n"
-        f"📞 تواصل معه لتحديد نقطة اللقاء"
-    )
-
+    await callback.message.edit_text(f"✅ تم قبول الطلب! 🎉\n\n👤 العميل: {client['full_name']}\n📱 جواله: {client['phone']}\n🎯 الوجهة: {match['destination']}\n\nتواصل مع العميل وابدأ الرحلة", reply_markup=contact_keyboard(client.get('username'), "💬 تواصل مع العميل"))
+    await bot.send_message(captain_id, "🚗 الرحلة جارية...\nاضغط الزر أدناه عند الوصول للوجهة:", reply_markup=trip_control_keyboard(captain_id, client_id))
+    client_notification = f"🎉 الكابتن وافق على طلبك!\n\n👨‍✈️ الكابتن: {captain['full_name']}\n📱 جواله: {captain['phone']}\n🚘 السيارة: {captain['car_model']} ({captain['car_plate']})\n\n🚗 الكابتن في طريقه إليك\n📞 تواصل معه لتحديد نقطة اللقاء"
     await bot.send_message(client_id, client_notification, reply_markup=contact_keyboard(captain.get('username'), "💬 تواصل مع الكابتن"))
     await callback.answer()
 
@@ -923,15 +602,9 @@ async def handle_captain_acceptance(callback: types.CallbackQuery):
 async def handle_captain_rejection(callback: types.CallbackQuery):
     client_id = int(callback.data.split("_")[2])
     captain_id = callback.from_user.id
-
     update_match_status(client_id, captain_id, "rejected")
     await callback.message.edit_text("❌ تم رفض الطلب")
-
-    await bot.send_message(
-        client_id,
-        f"😔 عذراً، الكابتن غير متاح حالياً\n\n"
-        f"يمكنك اختيار كابتن آخر أو المحاولة لاحقاً"
-    )
+    await bot.send_message(client_id, f"😔 عذراً، الكابتن غير متاح حالياً\n\nيمكنك اختيار كابتن آخر أو المحاولة لاحقاً")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("complete_trip_"))
@@ -939,55 +612,24 @@ async def handle_trip_completion(callback: types.CallbackQuery):
     parts = callback.data.split("_")
     captain_id = int(parts[2])
     client_id = int(parts[3])
-
     match_id = update_match_status(client_id, captain_id, "completed")
-
-    await callback.message.edit_text(
-        "✅ تم إنهاء الرحلة بنجاح!\n"
-        "شكراً لك، يمكنك الآن استقبال طلبات جديدة"
-    )
-
-    await bot.send_message(
-        client_id,
-        "🏁 الحمد لله على سلامتك!\n\n"
-        "وصلت بخير إلى وجهتك\n"
-        "نود رأيك في الكابتن، كيف تقيم الخدمة؟",
-        reply_markup=rating_keyboard()
-    )
-
+    await callback.message.edit_text("✅ تم إنهاء الرحلة بنجاح!\nشكراً لك، يمكنك الآن استقبال طلبات جديدة")
+    await bot.send_message(client_id, "🏁 الحمد لله على سلامتك!\n\nوصلت بخير إلى وجهتك\nنود رأيك في الكابتن، كيف تقيم الخدمة؟", reply_markup=rating_keyboard())
     match = get_match_details(client_id, captain_id)
     if match:
-        rating_temp_data[client_id] = {
-            'match_id': match['id'],
-            'captain_id': captain_id,
-            'client_id': client_id
-        }
+        rating_temp_data[client_id] = {'match_id': match['id'], 'captain_id': captain_id, 'client_id': client_id}
     await callback.answer()
-
-# ================== معالجات التقييم ==================
 
 @dp.callback_query(F.data.startswith("rate_"))
 async def handle_rating_selection(callback: types.CallbackQuery, state: FSMContext):
     rating = int(callback.data.split("_")[1])
     client_id = callback.from_user.id
-    
     rating_data = rating_temp_data.get(client_id)
     if not rating_data:
         await callback.answer("❌ خطأ في بيانات التقييم", show_alert=True)
         return
-    
-    await state.update_data(
-        rating=rating,
-        match_id=rating_data['match_id'],
-        captain_id=rating_data['captain_id']
-    )
-    
-    await callback.message.edit_text(
-        f"✅ تقييمك: {'⭐' * rating}\n\n"
-        f"📝 اكتب تعليقك على الخدمة (اختياري):\n"
-        f"💡 مثلاً: كابتن محترم، سيارة نظيفة، وقت مناسب...",
-        reply_markup=rating_notes_keyboard()
-    )
+    await state.update_data(rating=rating, match_id=rating_data['match_id'], captain_id=rating_data['captain_id'])
+    await callback.message.edit_text(f"✅ تقييمك: {'⭐' * rating}\n\n📝 اكتب تعليقك على الخدمة (اختياري):\n💡 مثلاً: كابتن محترم، سيارة نظيفة، وقت مناسب...", reply_markup=rating_notes_keyboard())
     await state.set_state(RatingStates.rating_comment)
     await callback.answer()
 
@@ -1004,13 +646,7 @@ async def handle_skip_note_comment(callback: types.CallbackQuery, state: FSMCont
 @dp.message(RatingStates.rating_comment)
 async def handle_rating_comment(message: types.Message, state: FSMContext):
     comment = message.text.strip()
-    
-    await message.answer(
-        f"💬 تعليقك: {comment}\n\n"
-        f"📋 هل تريد إضافة ملاحظة خاصة؟\n"
-        f"💡 مثلاً: شكراً، أو اقتراحات للتحسين...",
-        reply_markup=rating_notes_keyboard()
-    )
+    await message.answer(f"💬 تعليقك: {comment}\n\n📋 هل تريد إضافة ملاحظة خاصة؟\n💡 مثلاً: شكراً، أو اقتراحات للتحسين...", reply_markup=rating_notes_keyboard())
     await state.update_data(comment=comment)
     await state.set_state(RatingStates.rating_notes)
 
@@ -1035,49 +671,20 @@ async def finalize_rating(message, state: FSMContext, comment="", notes="", clie
     data = await state.get_data()
     if not client_id:
         client_id = message.from_user.id
-    
-    success = save_rating(
-        data['match_id'],
-        client_id,
-        data['captain_id'],
-        data['rating'],
-        comment,
-        notes
-    )
-    
+    success = save_rating(data['match_id'], client_id, data['captain_id'], data['rating'], comment, notes)
     client = get_user_by_id(client_id)
-    
     if success:
-        rating_summary = f"""
-🙏 شكراً لك على تقييمك!
-
-⭐ التقييم: {'⭐' * data['rating']}
-💬 التعليق: {comment if comment else 'لا يوجد'}
-📋 الملاحظة: {notes if notes else 'لا يوجد'}
-
-رأيك يساعدنا في تحسين الخدمة
-نتطلع لخدمتك مرة أخرى في دربك ✨
-        """
-        
+        rating_summary = f"🙏 شكراً لك على تقييمك!\n\n⭐ التقييم: {'⭐' * data['rating']}\n💬 التعليق: {comment if comment else 'لا يوجد'}\n📋 الملاحظة: {notes if notes else 'لا يوجد'}\n\nرأيك يساعدنا في تحسين الخدمة\nنتطلع لخدمتك مرة أخرى في دربك ✨"
         await message.answer(rating_summary, reply_markup=get_main_keyboard(client['role']))
-        
         rating_text = f"⭐ حصلت على تقييم جديد: {'⭐' * data['rating']}"
         if comment.strip():
             rating_text += f"\n💬 التعليق: {comment}"
-        
         await bot.send_message(data['captain_id'], rating_text)
-        
         if client_id in rating_temp_data:
             del rating_temp_data[client_id]
     else:
-        await message.answer(
-            "❌ حدث خطأ في حفظ التقييم، يرجى المحاولة مرة أخرى",
-            reply_markup=get_main_keyboard(client['role'])
-        )
-    
+        await message.answer("❌ حدث خطأ في حفظ التقييم، يرجى المحاولة مرة أخرى", reply_markup=get_main_keyboard(client['role']))
     await state.clear()
-
-# ================== معالجات تعديل البيانات ==================
 
 @dp.callback_query(F.data == "edit_profile")
 async def edit_profile_handler(callback: types.CallbackQuery):
@@ -1085,29 +692,12 @@ async def edit_profile_handler(callback: types.CallbackQuery):
     if not user:
         await callback.answer("❌ خطأ في البيانات", show_alert=True)
         return
-    
-    profile_info = f"""
-👤 بياناتك الحالية:
-
-📛 الاسم: {user['full_name']}
-📱 الجوال: {user['phone']}
-📍 المدينة: {user['city']}
-    """
-    
+    profile_info = f"👤 بياناتك الحالية:\n\n📛 الاسم: {user['full_name']}\n📱 الجوال: {user['phone']}\n📍 المدينة: {user['city']}\n"
     if user['role'] == 'captain':
-        profile_info += f"""
-🚘 السيارة: {user['car_model']}
-🔢 اللوحة: {user['car_plate']}
-📍 مناطق العمل:
-- {user['neighborhood']}
-- {user['neighborhood2']}  
-- {user['neighborhood3']}
-        """
+        profile_info += f"🚘 السيارة: {user['car_model']}\n🔢 اللوحة: {user['car_plate']}\n📍 مناطق العمل:\n- {user['neighborhood']}\n- {user['neighborhood2']}\n- {user['neighborhood3']}\n"
     else:
         profile_info += f"🏘️ الحي: {user['neighborhood']}"
-    
     profile_info += "\n\nاختر البيان الذي تريد تعديله:"
-    
     await callback.message.edit_text(profile_info, reply_markup=edit_profile_keyboard(user['role']))
     await callback.answer()
 
@@ -1152,17 +742,12 @@ async def handle_new_car_model(message: types.Message, state: FSMContext):
 @dp.message(EditStates.edit_car_plate)
 async def handle_new_car_plate(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
-        UPDATE users SET car_model=%s, car_plate=%s 
-        WHERE user_id=%s
-    """, (data['new_car_model'], message.text, message.from_user.id))
+    cur.execute("UPDATE users SET car_model=%s, car_plate=%s WHERE user_id=%s", (data['new_car_model'], message.text, message.from_user.id))
     conn.commit()
     cur.close()
     conn.close()
-    
     user = get_user_by_id(message.from_user.id)
     await message.answer("✅ تم تحديث بيانات السيارة بنجاح!", reply_markup=get_main_keyboard(user['role']))
     await state.clear()
@@ -1173,15 +758,7 @@ async def edit_neighborhoods_handler(callback: types.CallbackQuery, state: FSMCo
     if user['role'] != 'captain':
         await callback.answer("❌ هذه الميزة للكباتن فقط", show_alert=True)
         return
-    
-    await callback.message.edit_text(
-        f"📍 مناطق عملك الحالية:\n"
-        f"• {user['neighborhood']}\n"
-        f"• {user['neighborhood2']}\n"
-        f"• {user['neighborhood3']}\n\n"
-        f"🏘️ اختر الحي الأول الجديد:",
-        reply_markup=neighborhood_keyboard(user['city'])
-    )
+    await callback.message.edit_text(f"📍 مناطق عملك الحالية:\n• {user['neighborhood']}\n• {user['neighborhood2']}\n• {user['neighborhood3']}\n\n🏘️ اختر الحي الأول الجديد:", reply_markup=neighborhood_keyboard(user['city']))
     await state.set_state(EditStates.change_neighborhood)
     await callback.answer()
 
@@ -1189,26 +766,17 @@ async def edit_neighborhoods_handler(callback: types.CallbackQuery, state: FSMCo
 async def handle_edit_neighborhood(callback: types.CallbackQuery, state: FSMContext):
     neighborhood = callback.data.replace("neigh_", "")
     user = get_user_by_id(callback.from_user.id)
-    
     if user['role'] == 'client':
         update_user_field(callback.from_user.id, "neighborhood", neighborhood)
         await callback.message.edit_text("✅ تم تحديث بياناتك بنجاح!")
         await asyncio.sleep(1)
         await callback.message.delete()
-        await bot.send_message(
-            callback.from_user.id,
-            f"✅ تم تحديث منطقتك إلى: {user['city']} - {neighborhood}",
-            reply_markup=get_main_keyboard(user['role'])
-        )
+        await bot.send_message(callback.from_user.id, f"✅ تم تحديث منطقتك إلى: {user['city']} - {neighborhood}", reply_markup=get_main_keyboard(user['role']))
         await state.clear()
         await callback.answer()
         return
-    
     await state.update_data(new_neighborhood=neighborhood)
-    await callback.message.edit_text(
-        f"✅ الحي الأول: {neighborhood}\n\n🏘️ اختر الحي الثاني:",
-        reply_markup=neighborhood_keyboard(user['city'], [neighborhood])
-    )
+    await callback.message.edit_text(f"✅ الحي الأول: {neighborhood}\n\n🏘️ اختر الحي الثاني:", reply_markup=neighborhood_keyboard(user['city'], [neighborhood]))
     await state.set_state(RegisterStates.neighborhood2)
     await callback.answer()
 
@@ -1222,79 +790,43 @@ async def edit_city_handler(callback: types.CallbackQuery, state: FSMContext):
 async def change_role_handler(callback: types.CallbackQuery):
     user = get_user_by_id(callback.from_user.id)
     current_role = "عميل" if user['role'] == 'client' else "كابتن"
-    
-    await callback.message.edit_text(
-        f"🔄 تغيير الدور\n\n"
-        f"دورك الحالي: {current_role}\n\n"
-        f"اختر الدور الجديد:",
-        reply_markup=role_change_keyboard()
-    )
+    await callback.message.edit_text(f"🔄 تغيير الدور\n\nدورك الحالي: {current_role}\n\naختر الدور الجديد:", reply_markup=role_change_keyboard())
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("change_to_"))
 async def handle_role_change(callback: types.CallbackQuery):
     new_role = callback.data.split("_")[2]
     user_id = callback.from_user.id
-    
     update_user_field(user_id, "role", new_role)
-    
     role_text = "عميل" if new_role == "client" else "كابتن"
-    await callback.message.edit_text(
-        f"✅ تم تغيير دورك إلى: {role_text}\n\n"
-        f"يمكنك الآن الاستفادة من جميع خصائص الـ{role_text}"
-    )
-    
+    await callback.message.edit_text(f"✅ تم تغيير دورك إلى: {role_text}\n\nيمكنك الآن الاستفادة من جميع خصائص الـ{role_text}")
     await asyncio.sleep(2)
     user = get_user_by_id(user_id)
     await callback.message.delete()
-    await bot.send_message(
-        user_id,
-        f"🔄 تم تغيير دورك إلى {role_text}\n\nاستخدم الأزرار أدناه للتنقل:",
-        reply_markup=get_main_keyboard(new_role)
-    )
+    await bot.send_message(user_id, f"🔄 تم تغيير دورك إلى {role_text}\n\nاستخدم الأزرار أدناه للتنقل:", reply_markup=get_main_keyboard(new_role))
     await callback.answer()
 
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     user = get_user_by_id(callback.from_user.id)
-    
     role_text = "العميل" if user['role'] == 'client' else "الكابتن"
     status_text = ""
-    
     if user['role'] == 'captain':
         status_text = f"\n🟢 الحالة: {'متاح' if user['is_available'] else 'غير متاح'}"
-    
-    main_menu_text = f"""
-🏠 القائمة الرئيسية
-
-👤 {user['full_name']} ({role_text})
-📍 {user['city']}{status_text}
-
-استخدم الأزرار أدناه للتنقل:
-    """
-    
+    main_menu_text = f"🏠 القائمة الرئيسية\n\n👤 {user['full_name']} ({role_text})\n📍 {user['city']}{status_text}\n\nاستخدم الأزرار أدناه للتنقل:"
     await callback.message.delete()
-    await bot.send_message(
-        callback.from_user.id,
-        main_menu_text,
-        reply_markup=get_main_keyboard(user['role'])
-    )
+    await bot.send_message(callback.from_user.id, main_menu_text, reply_markup=get_main_keyboard(user['role']))
     await callback.answer()
-
-# ================== معالجات الرسائل غير المعروفة ==================
 
 @dp.message()
 async def handle_unknown_message(message: types.Message):
     user = get_user_by_id(message.from_user.id)
-    
     if not user:
         await message.answer("👋 مرحباً! يبدو أنك جديد هنا\nأرسل /start للتسجيل في النظام")
     else:
-        help_text = "❓ لم أفهم طلبك\n\n💡 استخدم الأزرار أدناه للتنقل في النظام"
-        await message.answer(help_text, reply_markup=get_main_keyboard(user['role']))
+        await message.answer("❓ لم أفهم طلبك\n\n💡 استخدم الأزرار أدناه للتنقل في النظام", reply_markup=get_main_keyboard(user['role']))
 
-# ================== تشغيل البوت ==================
 if __name__ == "__main__":
     print("🚀 بدء تشغيل بوت دربك...")
     try:
@@ -1302,10 +834,4 @@ if __name__ == "__main__":
         print("✅ تم الاتصال بقاعدة البيانات")
         asyncio.run(dp.start_polling(bot))
     except Exception as e:
-        print(f"❌ خطأ في التشغيل: {e}")States.change_neighborhood)
-        else:
-            await callback.message.edit_text(
-                f"🏘️ اختر حيك الجديد في {city}:",
-                reply_markup=neighborhood_keyboard(city)
-            )
-            await state.set_state(Edit
+        print(f"❌ خطأ في التشغيل: {e}")
